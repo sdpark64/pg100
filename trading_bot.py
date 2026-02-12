@@ -1612,9 +1612,12 @@ class TradingBot:
                         # 매도총잔량(total_ask)과 매수총잔량(total_bid) 금액 계산
                         total_ask_val = info['total_ask'] * info['price']
                         total_bid_val = info['total_bid'] * info['price']
+                        total_ask_bid = total_ask_val + total_bid_val
 
                         # 둘 중 하나라도 10억 미만이면 패스
-                        if total_ask_val < BotConfig.MIN_TOTAL_HOGA_AMT or total_bid_val < BotConfig.MIN_TOTAL_HOGA_AMT:
+                        # if total_ask_val < BotConfig.MIN_TOTAL_HOGA_AMT or total_bid_val < BotConfig.MIN_TOTAL_HOGA_AMT:
+                        # 둘의 합이 10억 미만이면 패스
+                        if total_ask_bid < BotConfig.MIN_TOTAL_HOGA_AMT:
                             continue
                         
                         self.execute_buy(info, "PROGRAM", None, 'PROGRAM', add_on_level=target_level)

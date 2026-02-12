@@ -855,7 +855,7 @@ class TradingBot:
                         
                         cand_mem = self.portfolio[my_code]['candle_memory']
                         # 과거 기록 + 현재 만들어지고 있는 봉을 합쳐서 분석
-                        history = cand_mem['history'] + [cand_mem['current']] 
+                        history = cand_mem['history'] 
                         
                         # 감시 시간대 및 기준 설정
                         now_time = datetime.datetime.now()

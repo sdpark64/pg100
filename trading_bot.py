@@ -1537,9 +1537,9 @@ class TradingBot:
                         # ✅ 시간대별 프로그램 수급 필터 적용
                         # ----------------------------------------------------------
                         time_filter = 0
-                        if (now.hour == 9 and now.minute < 20):
+                        if (now.hour == 9 and now.minute < 30):
                             time_filter = BotConfig.PG_TIME_FILTER_0  # 50억
-                        elif (now.hour == 9 and now.minute >= 20) or (now.hour < 11):
+                        elif (now.hour == 9 and now.minute >= 30) or (now.hour < 11):
                             time_filter = BotConfig.PG_TIME_FILTER_1  # 200억
                         elif (now.hour >= 11 and now.hour < 13):
                             continue    # 매수금지

@@ -55,8 +55,8 @@ def print(*args, **kwargs):
 # ==============================================================================
 # 🕹️ [모드 설정]
 # ==============================================================================
-MODE = "REAL"   # 실전투자
-# MODE = "MOCK"   # 모의투자 (기본값)
+# MODE = "REAL"   # 실전투자
+MODE = "MOCK"   # 모의투자 (기본값)
 
 if MODE == "REAL":
     config.TELEGRAM_BOT_TOKEN = config.REAL_TELEGRAM_BOT_TOKEN
@@ -98,18 +98,18 @@ class BotConfig:
     # 13:00 ~ 장마감 : 300억
     PG_TIME_FILTER_0 = 5_000_000_000
     PG_TIME_FILTER_1 = 20_000_000_000
-    PG_TIME_FILTER_2 = 20_000_000_000
-    PG_TIME_FILTER_3 = 25_000_000_000
-    PG_TIME_FILTER_4 = 30_000_000_000
+    PG_TIME_FILTER_2 = 25_000_000_000
+    PG_TIME_FILTER_3 = 50_000_000_000
+    PG_TIME_FILTER_4 = 100_000_000_000
 
     # 🔥 [프로그램 자이언트 설정]
     PG_MILESTONES = [
         5_000_000_000,   # 150억
-        50_000_000_000,   # 500억
+        20_000_000_000,   # 200억
+        50_000_000_000,  # 500억
         100_000_000_000,  # 1000억
         150_000_000_000,  # 1500억
-        200_000_000_000,  # 2000억
-        300_000_000_000   # 3000억
+        200_000_000_000   # 2000억
     ]
     
     # 기준점 하향 조정 (200억 -> 150억)
@@ -152,19 +152,19 @@ class BotConfig:
     
     # ⚔️ [자이언트 전략 등락률 범위]
     GIANT_RATE_MIN = 3.0
-    GIANT_RATE_MAX = 10.0
+    GIANT_RATE_MAX = 30.0
 
     # ✅ [추가] 프로그램 자이언트용 최소 호가 총잔량 금액 (기본 1억)
-    MIN_TOTAL_HOGA_AMT = 100_000_000
+    MIN_TOTAL_HOGA_AMT = 200_000_000
 
     # 🛡️ [매도/청산 조건]
-    PARTIAL_PROFIT_RATE = 0.015  # 수익률 2% 부분익절
+    PARTIAL_PROFIT_RATE = 0.02  # 수익률 2% 부분익절
     PARTIAL_SELL_RATIO = 0.5    # 부분익절, 절반매도
-    STOP_LOSS_RATE = -0.012  # 손절 -1.2%      
-    TARGET_PROFIT = 0.28        
+    STOP_LOSS_RATE = -0.02  # 손절 -2%      
+    TARGET_PROFIT = 0.29        
     
-    TS_TRIGGER_RATE = 0.02  
-    TS_STOP_GAP = 0.01      
+    TS_TRIGGER_RATE = 0.04  
+    TS_STOP_GAP = 0.02      
 
     MARKET_CLOSE_HOUR = 15
     MARKET_CLOSE_MINUTE = 15
@@ -359,7 +359,8 @@ class KisApi:
         # ------------------------------------------------------------------
         # STEP 1. 기본 시세 & 프로그램 수급 조회 (inquire-price)
         # ------------------------------------------------------------------
-        url_price = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
+        # url_price = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
+        base_url = BotConfig.URL_REAL if MODE == "REAL" else BotConfig.URL_MOCK
         headers_price = self.get_headers("FHKST01010100", type="DATA")
         params_price = { "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code }
 
@@ -1537,7 +1538,7 @@ class TradingBot:
                         # ----------------------------------------------------------
                         time_filter = 0
                         if (now.hour == 9 and now.minute < 20):
-                            time_filter = BotConfig.PG_TIME_FILTER_1  # 50억 -> 200억으로 수정
+                            time_filter = BotConfig.PG_TIME_FILTER_0  # 50억
                         elif (now.hour == 9 and now.minute >= 20) or (now.hour < 11):
                             time_filter = BotConfig.PG_TIME_FILTER_1  # 200억
                         elif (now.hour >= 11 and now.hour < 13):

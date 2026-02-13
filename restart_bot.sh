@@ -4,7 +4,7 @@
 # 설정 변수
 # ==============================================================================
 # 프로젝트 경로 (파일 위치)
-PROJECT_DIR="/home/ubuntu/stock/final"
+PROJECT_DIR="/home/ubuntu/stock/pg100"
 
 # 실행할 파이썬 파일명
 SCRIPT_NAME="trading_bot.py"

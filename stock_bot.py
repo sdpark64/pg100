@@ -87,8 +87,8 @@ class BotConfig:
     INVEST_RATIO = 0.15   
     
     # 🔢 [일별 매수 종목 수 제한]
-    MAX_DAILY_THEME = 3    
-    MAX_DAILY_MORNING = 3  
+    MAX_DAILY_THEME = 10    
+    MAX_DAILY_MORNING = 10  
     
     # 🔥 [시간대별 프로그램 수급 필터] (이 금액을 넘어야만 매수 로직 발동)
     # 09:00 ~ 09:30 : 50억
@@ -121,8 +121,8 @@ class BotConfig:
 
     # 🔥 [모닝 급등주 프로그램 수급 기준]
     MORNING_PG_AMT_10MIN = 0
-    MORNING_PG_AMT_30MIN = 1_000_000_000
-    MORNING_PG_AMT_LATE  = 3_000_000_000
+    MORNING_PG_AMT_30MIN = 0 #1_000_000_000
+    MORNING_PG_AMT_LATE  = 0 #3_000_000_000
 
     # 🕒 [재매수 쿨타임 & 타임아웃]
     REBUY_COOLTIME_MINUTES = 480
@@ -136,9 +136,9 @@ class BotConfig:
     MAX_WICK_RATIO = 0.2
 
     # 📊 [모닝 거래대금 기준]
-    MORNING_VOL_LEVEL_1 = 3_000_000_000   
-    MORNING_VOL_LEVEL_2 = 10_000_000_000  
-    MORNING_VOL_LEVEL_3 = 30_000_000_000  
+    MORNING_VOL_LEVEL_1 = 0 #3_000_000_000   
+    MORNING_VOL_LEVEL_2 = 0 #10_000_000_000  
+    MORNING_VOL_LEVEL_3 = 0 #30_000_000_000  
     
     # ⏳ [시간 제한]
     MORNING_MSG_WINDOW = 1200   #모닝전략 09:20 까지  
@@ -1685,23 +1685,24 @@ class TradingBot:
                                 gap_rate = (info['open'] - prev_close) / prev_close * 100
                                 if not (BotConfig.MORNING_GAP_MIN <= gap_rate <= BotConfig.MORNING_GAP_MAX): continue
                                 
-                                pg_buy_qty = info['program_buy']
-                                pg_buy_amt = pg_buy_qty * info['price']
+                                # pg_buy_qty = info['program_buy']
+                                # pg_buy_amt = pg_buy_qty * info['price']
                                 
-                                min_pg_amt = BotConfig.MORNING_PG_AMT_LATE
-                                if elapsed <= 600:     
-                                    min_pg_amt = BotConfig.MORNING_PG_AMT_10MIN 
-                                elif elapsed <= 1800: 
-                                    min_pg_amt = BotConfig.MORNING_PG_AMT_30MIN
+                                # min_pg_amt = BotConfig.MORNING_PG_AMT_LATE
+                                # if elapsed <= 600:     
+                                #     min_pg_amt = BotConfig.MORNING_PG_AMT_10MIN 
+                                # elif elapsed <= 1800: 
+                                #     min_pg_amt = BotConfig.MORNING_PG_AMT_30MIN
                                 
-                                if elapsed <= 600:
-                                    is_pg_good = (pg_buy_amt > 0)
-                                else:
-                                    is_pg_good = (pg_buy_amt >= min_pg_amt)
+                                # if elapsed <= 600:
+                                #     is_pg_good = (pg_buy_amt > 0)
+                                # else:
+                                #     is_pg_good = (pg_buy_amt >= min_pg_amt)
                                 
-                                is_ask_wall_good = 20.0 <= info['bid_ask_ratio'] <= 90.0
+                                # is_ask_wall_good = 20.0 <= info['bid_ask_ratio'] <= 90.0
                                 
-                                if is_pg_good and is_ask_wall_good:
+                                # if is_pg_good and is_ask_wall_good:
+                                if is_ask_wall_good:
                                     self.execute_buy(stock, "모닝급등", None, 'MORNING')
                                     if self.get_current_slots_used() != current_slots: break
                         

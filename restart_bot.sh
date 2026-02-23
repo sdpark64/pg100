@@ -7,7 +7,7 @@
 PROJECT_DIR="/home/ubuntu/stock/pg100"
 
 # 실행할 파이썬 파일명
-SCRIPT_NAME="trading_bot.py"
+SCRIPT_NAME="stock_bot.py"
 
 # 가상환경 경로 (home/stock 폴더가 가상환경 루트라고 가정)
 VENV_ACTIVATE="/home/ubuntu/stock/bin/activate"

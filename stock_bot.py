@@ -87,8 +87,8 @@ class BotConfig:
     INVEST_RATIO = 0.15   
     
     # 🔢 [일별 매수 종목 수 제한]
-    MAX_DAILY_THEME = 0    
-    MAX_DAILY_MORNING = 0  
+    MAX_DAILY_THEME = 3    
+    MAX_DAILY_MORNING = 3  
     
     # 🔥 [시간대별 프로그램 수급 필터] (이 금액을 넘어야만 매수 로직 발동)
     # 09:00 ~ 09:30 : 50억
@@ -133,7 +133,7 @@ class BotConfig:
 
     # 🛡️ 안전장치
     MIN_HOGA_AMT = 50_000_000 
-    MAX_WICK_RATIO = 0.3  
+    MAX_WICK_RATIO = 0.2
 
     # 📊 [모닝 거래대금 기준]
     MORNING_VOL_LEVEL_1 = 3_000_000_000   
@@ -141,8 +141,8 @@ class BotConfig:
     MORNING_VOL_LEVEL_3 = 30_000_000_000  
     
     # ⏳ [시간 제한]
-    MORNING_MSG_WINDOW = 1200   #모닝전략 09:10 까지  
-    THEME_MSG_WINDOW   = 3600  
+    MORNING_MSG_WINDOW = 1200   #모닝전략 09:20 까지  
+    THEME_MSG_WINDOW   = 21600  #테마전략 하루종일
     
     # ⚔️ [모닝 전략]
     MORNING_GAP_MIN = 1.0     
@@ -152,7 +152,7 @@ class BotConfig:
     
     # ⚔️ [자이언트 전략 등락률 범위]
     GIANT_RATE_MIN = 3.0
-    GIANT_RATE_MAX = 30.0
+    GIANT_RATE_MAX = 28.0       # 상한가 종목 제외
 
     # ✅ [추가] 프로그램 자이언트용 최소 호가 총잔량 금액 (기본 1억)
     MIN_TOTAL_HOGA_AMT = 200_000_000
@@ -359,8 +359,8 @@ class KisApi:
         # ------------------------------------------------------------------
         # STEP 1. 기본 시세 & 프로그램 수급 조회 (inquire-price)
         # ------------------------------------------------------------------
-        # url_price = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
-        base_url = BotConfig.URL_REAL if MODE == "REAL" else BotConfig.URL_MOCK
+        url_price = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-price"
+        # base_url = BotConfig.URL_REAL if MODE == "REAL" else BotConfig.URL_MOCK
         headers_price = self.get_headers("FHKST01010100", type="DATA")
         params_price = { "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code }
 
@@ -738,11 +738,17 @@ class TradingBot:
 
                     # [B] 계좌 -> 봇 확인
                     for real_code, info in real_holdings.items():
-                        if real_code not in self.portfolio and real_code not in self.blacklist:
+                        # ✅ [수정] 블랙리스트 조건 삭제. 계좌에 있으면 무조건 관리 시작
+                        if real_code not in self.portfolio:
+                            
+                            # 만약 과거에 수급이탈이나 수동매도 착각으로 블랙리스트에 있었다면 삭제
+                            if real_code in self.blacklist:
+                                del self.blacklist[real_code]
+
                             self.portfolio[real_code] = {
                                 'name': info['name'],
                                 'qty': info['qty'],
-                                'buy_price': info['price'],
+                                'buy_price': info['price'], # 증권사 평균단가
                                 'leader': None,
                                 'leader_name': 'Unknown',
                                 'strategy': 'RECOVERED',
@@ -1537,14 +1543,14 @@ class TradingBot:
                         # ✅ 시간대별 프로그램 수급 필터 적용
                         # ----------------------------------------------------------
                         time_filter = 0
-                        if (now.hour == 9 and now.minute < 30):
+                        if (now.hour == 9 and now.minute < 10):
                             time_filter = BotConfig.PG_TIME_FILTER_0  # 50억
-                        elif (now.hour == 9 and now.minute >= 30) or (now.hour < 11):
+                        elif (now.hour == 9 and now.minute >= 10) or (now.hour < 15):
                             time_filter = BotConfig.PG_TIME_FILTER_1  # 200억
-                        elif (now.hour >= 11 and now.hour < 13):
-                            continue    # 매수금지
-                        elif (now.hour >= 13 and now.hour < 15):
-                            time_filter = BotConfig.PG_TIME_FILTER_1  # 200억
+                        # elif (now.hour >= 11 and now.hour < 13):
+                        #     continue    # 매수금지
+                        # elif (now.hour >= 13 and now.hour < 15):
+                        #     time_filter = BotConfig.PG_TIME_FILTER_1  # 200억
                         else: # 15시 이후
                             continue    # 매수금지
                         

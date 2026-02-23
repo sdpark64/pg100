@@ -141,8 +141,8 @@ class BotConfig:
     MORNING_VOL_LEVEL_3 = 0 #30_000_000_000  
     
     # ⏳ [시간 제한]
-    MORNING_MSG_WINDOW = 1200   #모닝전략 09:20 까지  
-    THEME_MSG_WINDOW   = 21600  #테마전략 하루종일
+    MORNING_MSG_WINDOW = 3600   #모닝전략 10:00 까지  
+    THEME_MSG_WINDOW   = 36000  #테마전략 하루종일
     
     # ⚔️ [모닝 전략]
     MORNING_GAP_MIN = 1.0     

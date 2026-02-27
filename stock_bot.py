@@ -1405,8 +1405,17 @@ class TradingBot:
                                 msg += "\n없음"
                             else:
                                 for c, v in self.portfolio.items():
-                                    rate = v.get('max_profit_rate', 0) * 100
-                                    msg += f"\n- {v['name']}: {v['qty']}주 (최고 {rate:.1f}%)"
+                                    # 🎯 API를 통해 현재가 실시간 조회
+                                    stock_info = self.api.fetch_price_detail(c, v['name'])
+                                    
+                                    if stock_info and v['buy_price'] > 0:
+                                        cur_price = stock_info['price']
+                                        cur_rate = (cur_price - v['buy_price']) / v['buy_price'] * 100
+                                        msg += f"\n- {v['name']}: {v['qty']}주 (현재 {cur_rate:+.2f}%)"
+                                    else:
+                                        # 조회 실패 시 예외 처리
+                                        msg += f"\n- {v['name']}: {v['qty']}주 (수익률 조회 실패)"
+                                        
                             telegram_notifier.send_telegram_message(msg)
 
                         elif text == '/stop' or text == 'stop':
@@ -1416,10 +1425,6 @@ class TradingBot:
                         elif text == '/start' or text == 'start':
                             self.is_buy_active = True
                             telegram_notifier.send_telegram_message("🟢 [원격제어] 매수 재개!")
-
-                        # elif text == '/sell' or text == 'sell':
-                        #     telegram_notifier.send_telegram_message("🚨 [원격제어] 긴급 전량 매도 실행!")
-                        #     self.liquidate_all_positions()
 
                         elif text == '/sell' or text == 'sell':
                             # 기존: self.liquidate_all_positions()

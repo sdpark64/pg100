@@ -1139,7 +1139,8 @@ class TradingBot:
                     strategy_msg_map = {
                         'THEME': f"🔗 테마: {theme}\n👑 대장: {leader_name} {leader_rate_str}",
                         'PROGRAM': f"🤖 프로그램 매수 포착",
-                        'MORNING': f"☀️ 모닝 급등 포착"
+                        'MORNING': f"☀️ 모닝 급등 포착",
+                        'VALUE_KING': f"💎 거래대금 주도주 포착"
                     }
                     detail_msg = strategy_msg_map.get(strategy_type, "")
 

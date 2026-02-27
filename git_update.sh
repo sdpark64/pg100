@@ -1,3 +1,3 @@
 git add .
-git commit -m "모닝전략 프로그램 조건 삭제"
+git commit -m "코드 효율화, 전략 4 추가"
 git push -u origin main

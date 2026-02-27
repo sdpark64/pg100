@@ -87,8 +87,8 @@ class BotConfig:
     INVEST_RATIO = 0.15   
     
     # 🔢 [일별 매수 종목 수 제한]
-    MAX_DAILY_THEME = 10    
-    MAX_DAILY_MORNING = 10  
+    MAX_DAILY_THEME = 99
+    MAX_DAILY_MORNING = 99
     
     # 🔥 [시간대별 프로그램 수급 필터] (이 금액을 넘어야만 매수 로직 발동)
     # 09:00 ~ 09:30 : 50억
@@ -121,8 +121,8 @@ class BotConfig:
 
     # 🔥 [모닝 급등주 프로그램 수급 기준]
     MORNING_PG_AMT_10MIN = 0
-    MORNING_PG_AMT_30MIN = 0 #1_000_000_000
-    MORNING_PG_AMT_LATE  = 0 #3_000_000_000
+    MORNING_PG_AMT_30MIN = 1_000_000_000
+    MORNING_PG_AMT_LATE  = 3_000_000_000
 
     # 🕒 [재매수 쿨타임 & 타임아웃]
     REBUY_COOLTIME_MINUTES = 480
@@ -133,7 +133,7 @@ class BotConfig:
 
     # 🛡️ 안전장치
     MIN_HOGA_AMT = 50_000_000 
-    MAX_WICK_RATIO = 0.2
+    MAX_WICK_RATIO = 0.1
 
     # 📊 [모닝 거래대금 기준]
     MORNING_VOL_LEVEL_1 = 0 #3_000_000_000   
@@ -171,6 +171,19 @@ class BotConfig:
 
     TIME_STOP_MINUTES = 600      # 매수 후 20분 지나면 체크
     TIME_STOP_PROFIT = 0.0      # 20분 지났는데 수익률이 0% 이하(본전 이하)면 매도
+
+    # 🔢 [일별 매수 종목 수 제한]
+    MAX_DAILY_VALUE_KING = 99  # 추가
+    
+    # ⚔️ [밸류 킹 전략]
+    VALUE_KING_GAP_MIN = 1.0     # 갭 1% 이상
+    VALUE_KING_RATE_MIN = 3.0    # 현재가 3% 이상
+
+    # ✅ [VALUE_KING 기준] 당일 거래대금 500억 원 이상
+    VALUE_KING_MIN_VALUE = 50_000_000_000
+
+    # 프로그램 순매도 허용 한도 (거래대금의 5% 이내면 매도 중이어도 진입)
+    VALUE_KING_PG_SELL_LIMIT_RATIO = 0.05
 
 # ==============================================================================
 # 2. KIS API 래퍼
@@ -552,11 +565,11 @@ class KisApi:
         headers = self.get_headers(tr_id, type="TRADE")
 
         if price > 0:
-            ord_dvsn = "03"       # 00: 지정가 (Limit Order) -> 최유리(03)로 수정
+            ord_dvsn = "01"       # 00: 지정가 (Limit Order) -> 최유리(03)로 수정
             # ord_unpr = str(price) # 입력받은 가격 사용
             ord_unpr = "0"
         else:
-            ord_dvsn = "03"       # 가격 0이면 최유리 (예비용)
+            ord_dvsn = "01"       # 가격 0이면 최유리 (예비용)
             ord_unpr = "0"
 
         body = {
@@ -716,7 +729,7 @@ class TradingBot:
                         
                         if my_code not in real_holdings:
                             self.missing_counts[my_code] = self.missing_counts.get(my_code, 0) + 1
-                            if self.missing_counts[my_code] >= 3:
+                            if self.missing_counts[my_code] >= 180:
                                 telegram_notifier.send_telegram_message(f"🗑️ [수동매도 감지] {self.portfolio[my_code]['name']} 포트폴리오 삭제 (최종)")
                                 self.blacklist[my_code] = {
                                     'reason': 'MANUAL_SELL', # 사유 명시
@@ -1509,6 +1522,7 @@ class TradingBot:
                 pg_list = self.api.fetch_condition_stocks("pg100")
                 theme_list = self.api.fetch_condition_stocks("top100")
                 morning_list = self.api.fetch_condition_stocks("hot100")
+                value_list = self.api.fetch_condition_stocks("value") # 👈 추가 (조건식 이름: value)
 
                 if not pg_list and theme_list: pg_list = theme_list
                 
@@ -1527,13 +1541,32 @@ class TradingBot:
                         code = item['stck_shrn_iscd']
                         name = item['hts_kor_isnm']
                         
+                        # 1차 필터: 이름 기반 잡주 제외
                         if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권"]) or name.endswith("우"):
                             continue
 
+                        # 2차 필터: 거래대금 미달 제외
                         est_total_amt = item['price'] * item['vol']
-                        if est_total_amt < (BotConfig.PG_LEVEL_0_AMT * 0.9): continue 
+                        if est_total_amt < (BotConfig.PG_LEVEL_0_AMT * 0.9): 
+                            continue 
                         
-                        # Case 1 & Case 2 공통 정보를 위해 미리 호출
+                        # ✅ [핵심 최적화] API 호출 전에, 조건검색 데이터만으로 먼저 거르기!
+                        item_rate = item.get('prdy_ctrt', 0.0)
+                        
+                        # 등락률이 기준 미달이거나 오버면 아예 API 호출도 안 하고 패스
+                        if item_rate < BotConfig.GIANT_RATE_MIN: continue
+                        if item_rate > BotConfig.GIANT_RATE_MAX: continue
+                        
+                        # 쿨타임이나 보유 중인 종목도 굳이 API 부를 필요 없음
+                        if code in self.portfolio: continue
+                        
+                        # 쿨타임 체크 (미리 당겨옴)
+                        if code in self.blacklist:
+                            sell_time = self.blacklist[code].get('sell_time')
+                            if sell_time and (now - sell_time).total_seconds() / 60 < BotConfig.REBUY_COOLTIME_MINUTES:
+                                continue
+
+                        # 🎯 1, 2차 필터를 통과한 '진짜 후보'에게만 API 호출 (속도 대폭 향상)
                         info = self.api.fetch_price_detail(code, name)
                         if not info: continue
                         
@@ -1634,7 +1667,91 @@ class TradingBot:
                 current_slots = self.get_current_slots_used()
 
                 # ==================================================================
-                # 🔥 [전략 1] 모닝 급등주
+                # 🔥 [전략 4] 밸류 킹 (거래대금 상위 주도주)
+                # ==================================================================
+                if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
+                    if self.daily_buy_cnt.get('VALUE_KING', 0) < BotConfig.MAX_DAILY_VALUE_KING:
+                        for item in value_list:
+                            code = item['stck_shrn_iscd']
+                            name = item['hts_kor_isnm']
+                            rate = item['prdy_ctrt']
+
+                            # ------------------------------------------------------
+                            # 1차 사전 필터 (API 호출 최소화로 봇 속도 극대화)
+                            # ------------------------------------------------------
+                            if code in self.portfolio or code in self.blacklist: continue
+                            if rate < BotConfig.VALUE_KING_RATE_MIN: continue
+
+                            # 이름 기반 잡주/ETF 제외
+                            if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO"]) or name.endswith("우"):
+                                continue
+
+                            # ✅ [핵심 추가] API 호출 전, 조건검색 데이터로 거래대금 사전 차단
+                            est_trade_amt = item['price'] * item['vol']
+                            if est_trade_amt < BotConfig.VALUE_KING_MIN_VALUE: 
+                                continue
+
+                            # ------------------------------------------------------
+                            # 시간대별 거래대금 가변 필터 (핵심)
+                            # ------------------------------------------------------
+                            # elapsed: 장 개장(09:00) 후 흐른 시간(초)
+                            if elapsed <= 1800:     # 09:00 ~ 09:30
+                                dynamic_min_value = 50_000_000_000    # 500억 이상
+                            elif elapsed <= 3600:   # 09:30 ~ 10:00
+                                dynamic_min_value = 100_000_000_000   # 1,000억 이상
+                            elif elapsed <= 7200:   # 10:00 ~ 11:00
+                                dynamic_min_value = 150_000_000_000   # 1,500억 이상
+                            else:                   # 11:00 이후
+                                dynamic_min_value = 200_000_000_000   # 2,000억 이상
+
+                            est_trade_amt = item['price'] * item['vol']
+                            
+                            if est_trade_amt < dynamic_min_value: 
+                                continue
+
+                            # ------------------------------------------------------
+                            # 2차 상세 필터 (API 호출)
+                            # ------------------------------------------------------
+                            info = self.api.fetch_price_detail(code, name)
+                            if not info or info['open'] == 0: continue
+
+                            # 윗꼬리 필터링
+                            if info['wick_ratio'] >= BotConfig.MAX_WICK_RATIO: continue
+
+                            # 갭상승 필터링 (1% 이상)
+                            prev_close = info['price'] / (1 + info['rate']/100)
+                            gap_rate = (info['open'] - prev_close) / prev_close * 100
+                            if gap_rate < BotConfig.VALUE_KING_GAP_MIN: continue
+
+                            is_pg_ok = True
+
+                            '''
+                            # ------------------------------------------------------
+                            # 프로그램 수급 융통성 (삼성전자/하이닉스 대응)
+                            # ------------------------------------------------------
+                            pg_amt = info['program_buy'] * info['price']
+                            total_trade_amt = info['acml_vol'] * info['price']
+
+                            is_pg_ok = False
+                            if pg_amt > 0: 
+                                is_pg_ok = True # 프로그램 매수 중이면 1차 통과
+                            else:
+                                # 프로그램 매도 중이어도 매도 규모가 총 거래대금의 5% 미만이면 통과
+                                # (만약 프로그램 완전 무시하고 무조건 진입하려면 아래 줄을 if True: 로 변경)
+                                if abs(pg_amt) < (total_trade_amt * BotConfig.VALUE_KING_PG_SELL_LIMIT_RATIO):
+                                    is_pg_ok = True
+                            '''
+
+                            # ------------------------------------------------------
+                            # 최종 진입
+                            # ------------------------------------------------------
+                            if is_pg_ok:
+                                self.execute_buy(info, "거래대금상위", None, 'VALUE_KING')
+                                if self.get_current_slots_used() != current_slots: break
+                            
+
+                # ==================================================================
+                # 🔥 [전략 1] 모닝 급등주 (사전 필터링 최적화 완료)
                 # ==================================================================
                 if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
                     if elapsed <= BotConfig.MORNING_MSG_WINDOW:
@@ -1652,13 +1769,14 @@ class TradingBot:
                                 name = item['hts_kor_isnm']
                                 rate = item['prdy_ctrt']
                                 
-                                if code in self.blacklist or code in self.portfolio: continue 
-                                
-                                # 쿨타임 체크 (모닝 전략도 매도 후 바로 재진입 방지)
+                                # 1차 필터: 포트폴리오 및 블랙리스트(쿨타임) 사전 차단 (API 안 부름)
+                                if code in self.portfolio: continue 
                                 if code in self.blacklist:
                                     sell_time = self.blacklist[code].get('sell_time')
-                                    if sell_time and (now - sell_time).total_seconds() / 60 < BotConfig.REBUY_COOLTIME_MINUTES: continue
+                                    if sell_time and (now - sell_time).total_seconds() / 60 < BotConfig.REBUY_COOLTIME_MINUTES: 
+                                        continue
 
+                                # 2차 필터: 가격, 거래대금, 등락률 사전 차단 (API 안 부름)
                                 if item['price'] < BotConfig.MIN_STOCK_PRICE: continue
                                 est_trade_vol = item['price'] * item['vol']
                                 if est_trade_vol < min_trade_vol: continue
@@ -1670,9 +1788,8 @@ class TradingBot:
 
                             valid_candidates.sort(key=lambda x: x['rate'], reverse=True)
                             
+                            # 🎯 깐깐한 사전 필터를 통과한 '진짜 후보'에게만 API 호출
                             for stock in valid_candidates:
-                                if stock['code'] in self.blacklist or stock['code'] in self.portfolio: continue
-                                
                                 info = self.api.fetch_price_detail(stock['code'], stock['name'])
                                 if not info or info['open'] == 0: continue
                                 if info['wick_ratio'] >= BotConfig.MAX_WICK_RATIO: continue
@@ -1685,23 +1802,9 @@ class TradingBot:
                                 gap_rate = (info['open'] - prev_close) / prev_close * 100
                                 if not (BotConfig.MORNING_GAP_MIN <= gap_rate <= BotConfig.MORNING_GAP_MAX): continue
                                 
-                                # pg_buy_qty = info['program_buy']
-                                # pg_buy_amt = pg_buy_qty * info['price']
+                                # (요청하신 대로 프로그램 매수 조건은 생략하고 호가창만 확인)
+                                is_ask_wall_good = 20.0 <= info['bid_ask_ratio'] <= 90.0
                                 
-                                # min_pg_amt = BotConfig.MORNING_PG_AMT_LATE
-                                # if elapsed <= 600:     
-                                #     min_pg_amt = BotConfig.MORNING_PG_AMT_10MIN 
-                                # elif elapsed <= 1800: 
-                                #     min_pg_amt = BotConfig.MORNING_PG_AMT_30MIN
-                                
-                                # if elapsed <= 600:
-                                #     is_pg_good = (pg_buy_amt > 0)
-                                # else:
-                                #     is_pg_good = (pg_buy_amt >= min_pg_amt)
-                                
-                                # is_ask_wall_good = 20.0 <= info['bid_ask_ratio'] <= 90.0
-                                
-                                # if is_pg_good and is_ask_wall_good:
                                 if is_ask_wall_good:
                                     self.execute_buy(stock, "모닝급등", None, 'MORNING')
                                     if self.get_current_slots_used() != current_slots: break
@@ -1709,7 +1812,7 @@ class TradingBot:
                 current_slots = self.get_current_slots_used()
 
                 # ==================================================================
-                # 🔥 [전략 2] 테마 짝짓기
+                # 🔥 [전략 2] 테마 짝짓기 (대장주 API 조회 획기적 축소)
                 # ==================================================================
                 if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
                     if elapsed <= BotConfig.THEME_MSG_WINDOW:
@@ -1719,6 +1822,7 @@ class TradingBot:
                         else:
                             theme_groups = {}
                             
+                            # 테마 그룹핑 (기존 유지)
                             for item in theme_list:
                                 code = item['stck_shrn_iscd']
                                 name = item['hts_kor_isnm']
@@ -1740,16 +1844,21 @@ class TradingBot:
                                     leader = stocks[0]
                                     follower = stocks[1]
                                     
+                                    # 1차 필터: 가격 및 블랙리스트 차단 (API 안 부름)
                                     if leader['price'] < BotConfig.MIN_STOCK_PRICE: continue
                                     if follower['price'] < BotConfig.MIN_STOCK_PRICE: continue
+                                    if follower['code'] in self.portfolio: continue
                                     
-                                    if follower['code'] in self.blacklist or follower['code'] in self.portfolio: continue
-                                    
-                                    # 쿨타임 체크
                                     if follower['code'] in self.blacklist:
                                         sell_time = self.blacklist[follower['code']].get('sell_time')
                                         if sell_time and (now - sell_time).total_seconds() / 60 < BotConfig.REBUY_COOLTIME_MINUTES: continue
                                     
+                                    # ✅ [핵심 최적화] 대장주의 등락률이 28% 미만이고, 상한가 풀림(Timeout) 대기열에도 없다면 
+                                    # 상한가일 리가 없으므로 API 조회 없이 즉시 패스 (속도 엄청 빨라짐!)
+                                    if leader['rate'] < 28.0 and theme not in self.locked_leaders_time:
+                                        continue
+
+                                    # 🎯 대장주가 진짜 상한가 근처일 때만 API로 정확한 상한가 여부 확인
                                     leader_info = self.api.fetch_price_detail(leader['code'], leader['name'])
                                     if not leader_info: continue
                                     
@@ -1769,6 +1878,7 @@ class TradingBot:
                                             del self.locked_leaders_time[theme]
                                         continue 
 
+                                    # 대장주 조건이 성립했을 때 비로소 2등주(Follower) API 호출
                                     follower_info = self.api.fetch_price_detail(follower['code'], follower['name'])
                                     if not follower_info: continue
                                     if follower_info['wick_ratio'] >= BotConfig.MAX_WICK_RATIO: continue

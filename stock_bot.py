@@ -55,8 +55,8 @@ def print(*args, **kwargs):
 # ==============================================================================
 # 🕹️ [모드 설정]
 # ==============================================================================
-# MODE = "REAL"   # 실전투자
-MODE = "MOCK"   # 모의투자 (기본값)
+MODE = "REAL"   # 실전투자
+# MODE = "MOCK"   # 모의투자 (기본값)
 
 if MODE == "REAL":
     config.TELEGRAM_BOT_TOKEN = config.REAL_TELEGRAM_BOT_TOKEN
@@ -615,7 +615,7 @@ class TradingBot:
         
         # 테마 및 일일 제한 관리
         self.locked_leaders_time = {}      
-        self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0}
+        self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0, 'VALUE_KING': 0}
         self.bought_themes = set()         
         self.missing_counts = {}
         
@@ -1226,7 +1226,7 @@ class TradingBot:
             telegram_notifier.send_telegram_message(msg)
             self.portfolio = {}
             self.blacklist = {} # Dict 초기화
-            self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0}
+            self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0, 'VALUE_KING': 0}
             
             self.bought_themes = set()
             self.locked_leaders_time = {}
@@ -1548,7 +1548,8 @@ class TradingBot:
                         name = item['hts_kor_isnm']
                         
                         # 1차 필터: 이름 기반 잡주 제외
-                        if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권"]) or name.endswith("우"):
+                        if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
+    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"):
                             continue
 
                         # 2차 필터: 거래대금 미달 제외
@@ -1584,13 +1585,13 @@ class TradingBot:
                         time_filter = 0
                         if (now.hour == 9 and now.minute < 10):
                             time_filter = BotConfig.PG_TIME_FILTER_0  # 50억
-                        elif (now.hour == 9 and now.minute >= 10) or (now.hour < 15):
+                        elif (now.hour == 9 and now.minute >= 10) or (now.hour < 11):
                             time_filter = BotConfig.PG_TIME_FILTER_1  # 200억
                         # elif (now.hour >= 11 and now.hour < 13):
                         #     continue    # 매수금지
                         # elif (now.hour >= 13 and now.hour < 15):
                         #     time_filter = BotConfig.PG_TIME_FILTER_1  # 200억
-                        else: # 15시 이후
+                        else: # 11시 이후
                             continue    # 매수금지
                         
                         # 해당 시간대 기준치에 미달하면 아예 매수 불가
@@ -1689,7 +1690,9 @@ class TradingBot:
                             if rate < BotConfig.VALUE_KING_RATE_MIN: continue
 
                             # 이름 기반 잡주/ETF 제외
-                            if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO"]) or name.endswith("우"):
+                            if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", 
+    "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
+    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"):
                                 continue
 
                             # ✅ [핵심 추가] API 호출 전, 조건검색 데이터로 거래대금 사전 차단
@@ -1788,7 +1791,8 @@ class TradingBot:
                                 if est_trade_vol < min_trade_vol: continue
                                 
                                 if not (BotConfig.MORNING_RATE_MIN <= rate <= BotConfig.MORNING_RATE_MAX): continue
-                                if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권"]) or name.endswith("우"): continue
+                                if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
+    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"): continue
 
                                 valid_candidates.append({'code': code, 'name': name, 'rate': rate})
 
@@ -1834,7 +1838,8 @@ class TradingBot:
                                 name = item['hts_kor_isnm']
                                 rate = item['prdy_ctrt']
                                 
-                                if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권"]) or name.endswith("우"): continue
+                                if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
+    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"): continue
                                 
                                 if code in self.reverse_theme_map:
                                     themes = self.reverse_theme_map[code]

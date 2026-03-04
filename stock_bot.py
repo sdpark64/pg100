@@ -7,6 +7,9 @@ import threading
 import logging
 import logging.handlers
 import sys
+import os       # 👈 파일 존재 여부 확인용
+import signal   # 👈 종료 신호 감지용
+import copy     # 👈 딕셔너리 안전 복사용
 
 # 📂 사용자 파일 임포트
 import config
@@ -606,20 +609,98 @@ class TradingBot:
         self.is_buy_active = True  # 매수 활성화 여부 (기본 True)
         self.last_update_id = 0    # 마지막으로 처리한 텔레그램 메시지 ID
         
-        # 🧠 [블랙리스트 구조 변경] Dictionary로 변경하여 수급 추적 데이터 저장
-        # Key: Code, Value: {'reason': str, 'min_pg_amt': int, 'sell_time': datetime}
-        self.blacklist = {} 
+        # 🔄 [수정] 빈 딕셔너리 대신 파일에서 전체 상태(기억)를 불러옵니다.
+        self.load_state()
+        
+        # 🆕 [추가] 프로세스 종료(kill, Ctrl+C) 시그널 가로채기 등록
+        signal.signal(signal.SIGINT, self.handle_exit)
+        signal.signal(signal.SIGTERM, self.handle_exit)
         
         self.is_running = True
         self.market_open_time = None 
         
         # 테마 및 일일 제한 관리
         self.locked_leaders_time = {}      
-        self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0, 'VALUE_KING': 0}
         self.bought_themes = set()         
+
         self.missing_counts = {}
-        
         self.last_summary_time = 0
+
+    # =========================================================================
+    # 🆕 상태 관리 (State Management) 함수 3개 시작
+    # =========================================================================
+    def load_state(self):
+        filename = 'bot_state.json'
+        if os.path.exists(filename):
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+                
+                if data.get("date") == today_str:
+                    self.daily_buy_cnt = data.get("daily_buy_cnt", {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0, 'VALUEKING': 0})
+                    
+                    loaded_bl = {}
+                    for code, info in data.get("blacklist", {}).items():
+                        loaded_bl[code] = info
+                        if info.get('sell_time'):
+                            loaded_bl[code]['sell_time'] = datetime.datetime.fromisoformat(info['sell_time'])
+                    self.blacklist = loaded_bl
+                    
+                    loaded_pf = {}
+                    for code, info in data.get("portfolio", {}).items():
+                        loaded_pf[code] = info
+                        if info.get('buy_time'):
+                            loaded_pf[code]['buy_time'] = datetime.datetime.fromisoformat(info['buy_time'])
+                        if info.get('buy_time_dt'):
+                            loaded_pf[code]['buy_time_dt'] = datetime.datetime.fromisoformat(info['buy_time_dt'])
+                    self.portfolio = loaded_pf
+                    
+                    print(f"📥 [상태복원] 포트폴리오 {len(self.portfolio)}개, 블랙리스트 {len(self.blacklist)}개 복원 완료.")
+                    return 
+                else:
+                    print("🔄 [데이터초기화] 날짜가 변경되어 이전 상태를 폐기합니다.")
+            except Exception as e:
+                print(f"⚠️ 상태 로드 실패 (파일 손상 등): {e}")
+        
+        # 파일이 없거나 날짜가 다를 경우 초기화
+        self.portfolio = {}
+        self.blacklist = {}
+        self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0, 'VALUEKING': 0}
+
+    def save_state(self):
+        try:
+            bl_copy = copy.deepcopy(self.blacklist)
+            for code in bl_copy:
+                if isinstance(bl_copy[code]['sell_time'], datetime.datetime):
+                    bl_copy[code]['sell_time'] = bl_copy[code]['sell_time'].isoformat()
+                    
+            pf_copy = copy.deepcopy(self.portfolio)
+            for code in pf_copy:
+                if isinstance(pf_copy[code].get('buy_time'), datetime.datetime):
+                    pf_copy[code]['buy_time'] = pf_copy[code]['buy_time'].isoformat()
+                if isinstance(pf_copy[code].get('buy_time_dt'), datetime.datetime):
+                    pf_copy[code]['buy_time_dt'] = pf_copy[code]['buy_time_dt'].isoformat()
+            
+            data = {
+                "date": datetime.datetime.now().strftime("%Y-%m-%d"),
+                "daily_buy_cnt": self.daily_buy_cnt,
+                "blacklist": bl_copy,
+                "portfolio": pf_copy
+            }
+            with open('bot_state.json', 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"⚠️ 상태 저장 실패: {e}")
+
+    def handle_exit(self, signum, frame):
+        print(f"\n🛑 종료 신호({signum}) 감지! 봇의 기억을 안전하게 저장합니다...")
+        self.save_state()
+        sys.exit(0)
+    # =========================================================================
+    # 상태 관리 함수 3개 끝
+    # =========================================================================
 
     def load_theme_map(self):
         print(f"📥 [{MODE}] 테마 데이터 로딩 중...")
@@ -1140,7 +1221,7 @@ class TradingBot:
                         'THEME': f"🔗 테마: {theme}\n👑 대장: {leader_name} {leader_rate_str}",
                         'PROGRAM': f"🤖 프로그램 매수 포착",
                         'MORNING': f"☀️ 모닝 급등 포착",
-                        'VALUE_KING': f"💎 거래대금 주도주 포착"
+                        'VALUEKING': f"💎 거래대금 주도주 포착"
                     }
                     detail_msg = strategy_msg_map.get(strategy_type, "")
 
@@ -1193,6 +1274,7 @@ class TradingBot:
                     if strategy_type == 'THEME': self.bought_themes.add(theme)
 
                 telegram_notifier.send_telegram_message(msg)
+                self.save_state() # 👈 [추가] 매수 성공 시 상태를 즉시 저장
             else:
                 print(f"❌ [API오류] 주문 전송 실패: {res}")
         else:
@@ -1226,8 +1308,8 @@ class TradingBot:
             telegram_notifier.send_telegram_message(msg)
             self.portfolio = {}
             self.blacklist = {} # Dict 초기화
-            self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0, 'VALUE_KING': 0}
-            
+            self.daily_buy_cnt = {'MORNING': 0, 'THEME': 0, 'PROGRAM': 0, 'VALUEKING': 0}
+            self.save_state() # 👈 [추가] 자정 기준으로 텅 빈 상태를 파일에 덮어씌움
             self.bought_themes = set()
             self.locked_leaders_time = {}
             self.missing_counts = {}
@@ -1369,6 +1451,7 @@ class TradingBot:
                 }
                 
                 del self.portfolio[code]
+                self.save_state() # 👈 [추가] 매도 및 블랙리스트 등록 완료 후 즉시 저장
 
     # 📡 [신규] 텔레그램 명령 처리 쓰레드 함수
     def telegram_listener(self):
@@ -1677,7 +1760,7 @@ class TradingBot:
                 # 🔥 [전략 4] 밸류 킹 (거래대금 상위 주도주)
                 # ==================================================================
                 if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
-                    if self.daily_buy_cnt.get('VALUE_KING', 0) < BotConfig.MAX_DAILY_VALUE_KING:
+                    if self.daily_buy_cnt.get('VALUEKING', 0) < BotConfig.MAX_DAILY_VALUE_KING:
                         for item in value_list:
                             code = item['stck_shrn_iscd']
                             name = item['hts_kor_isnm']
@@ -1755,7 +1838,7 @@ class TradingBot:
                             # 최종 진입
                             # ------------------------------------------------------
                             if is_pg_ok:
-                                self.execute_buy(info, "거래대금상위", None, 'VALUE_KING')
+                                self.execute_buy(info, "거래대금상위", None, 'VALUEKING')
                                 if self.get_current_slots_used() != current_slots: break
                             
 

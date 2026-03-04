@@ -22,7 +22,7 @@ PID=$(pgrep -f "python3.*$SCRIPT_NAME")
 
 if [ -n "$PID" ]; then
     echo "Found running process (PID: $PID). Killing..."
-    kill -9 $PID
+    kill $PID
     sleep 2 # 프로세스가 완전히 죽을 때까지 잠시 대기
     echo "Process killed."
 else

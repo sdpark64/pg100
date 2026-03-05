@@ -1,3 +1,3 @@
 git add .
-git commit -m "value_king 전략오류 재수정, 블랙리스트 JSON 생성"
+git commit -m "​매수가 갱신, VI 수동매도 오인 방지"
 git push -u origin main

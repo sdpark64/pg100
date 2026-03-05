@@ -10,6 +10,7 @@ import sys
 import os       # 👈 파일 존재 여부 확인용
 import signal   # 👈 종료 신호 감지용
 import copy     # 👈 딕셔너리 안전 복사용
+import csv
 
 # 📂 사용자 파일 임포트
 import config
@@ -92,6 +93,16 @@ class BotConfig:
     # 🔢 [일별 매수 종목 수 제한]
     MAX_DAILY_THEME = 99
     MAX_DAILY_MORNING = 99
+    MAX_DAILY_VALUE_KING = 99  # 추 가
+
+    # ⚙️ [전략 실행 스위치] (True: 켜기, False: 끄기)
+    ENABLE_PROGRAM = True
+    ENABLE_VALUEKING = True
+    ENABLE_MORNING = True
+    ENABLE_THEME = True
+
+    # 🚫 [제외 종목 키워드 중앙 집중화]
+    EXCLUDE_KEYWORDS = ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]
     
     # 🔥 [시간대별 프로그램 수급 필터] (이 금액을 넘어야만 매수 로직 발동)
     # 09:00 ~ 09:30 : 50억
@@ -163,7 +174,7 @@ class BotConfig:
     # 🛡️ [매도/청산 조건]
     PARTIAL_PROFIT_RATE = 0.02  # 수익률 2% 부분익절
     PARTIAL_SELL_RATIO = 0.5    # 부분익절, 절반매도
-    STOP_LOSS_RATE = -0.02  # 손절 -2%      
+    STOP_LOSS_RATE = -0.015  # 손절 -1.5%      
     TARGET_PROFIT = 0.29        
     
     TS_TRIGGER_RATE = 0.04  
@@ -172,11 +183,8 @@ class BotConfig:
     MARKET_CLOSE_HOUR = 15
     MARKET_CLOSE_MINUTE = 15
 
-    TIME_STOP_MINUTES = 600      # 매수 후 20분 지나면 체크
-    TIME_STOP_PROFIT = 0.0      # 20분 지났는데 수익률이 0% 이하(본전 이하)면 매도
-
-    # 🔢 [일별 매수 종목 수 제한]
-    MAX_DAILY_VALUE_KING = 99  # 추가
+    TIME_STOP_MINUTES = 40      # 매수 후 40분 지나면 체크
+    TIME_STOP_PROFIT = 0.003      # 40분 지났는데 수익률이 0.3% 이하(본전 이하)면 매도
     
     # ⚔️ [밸류 킹 전략]
     VALUE_KING_GAP_MIN = 1.0     # 갭 1% 이상
@@ -187,6 +195,10 @@ class BotConfig:
 
     # 프로그램 순매도 허용 한도 (거래대금의 5% 이내면 매도 중이어도 진입)
     VALUE_KING_PG_SELL_LIMIT_RATIO = 0.05
+
+def is_excluded_stock(name):
+    if name.endswith("우"): return True
+    return any(keyword in name for keyword in BotConfig.EXCLUDE_KEYWORDS)
 
 # ==============================================================================
 # 2. KIS API 래퍼
@@ -625,6 +637,42 @@ class TradingBot:
 
         self.missing_counts = {}
         self.last_summary_time = 0
+        self.last_value_log_time = None  # 👈 [추가] 30분 단위 로깅 중복 방지용 시간 추적기
+        self.pending_sells = {}  # 매도 후 VI 대기(미체결) 종목 기억용
+
+    # =========================================================================
+    # 📝 [추가] 30분 단위 VALUEKING 대상종목 거래대금 로깅 함수 
+    # =========================================================================
+    def log_value_list_volumes(self, value_list):
+        if not value_list: return
+        
+        # 파일명은 날짜별로 생성 (예: value_volume_log_20260305.csv)
+        filename = f"value_volume_log_{datetime.datetime.now().strftime('%Y%m%d')}.csv"
+        file_exists = os.path.isfile(filename)
+        now_str = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        try:
+            with open(filename, mode='a', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(['Time', 'Code', 'Name', 'Price', 'Volume', 'Trade_Amt(100M)', 'Rate(%)'])
+                
+                for item in value_list:
+                    code = item.get('stck_shrn_iscd', '')
+                    name = item.get('hts_kor_isnm', '')
+                    price = item.get('price', 0)
+                    vol = item.get('vol', 0)
+                    rate = item.get('prdy_ctrt', 0.0)
+                    
+                    # 거래대금 계산 (억 단위 표기용)
+                    trade_amt = price * vol
+                    trade_amt_100m = trade_amt // 100000000
+                    
+                    writer.writerow([now_str, code, name, price, vol, trade_amt_100m, rate])
+                    
+            print(f"📝 [데이터 수집] {now_str} 기준 VALUEKING 후보 {len(value_list)}종목 거래대금 로깅 완료.")
+        except Exception as e:
+            print(f"⚠️ [로그 실패] 거래대금 기록 중 오류: {e}")
 
     # =========================================================================
     # 🆕 상태 관리 (State Management) 함수 3개 시작
@@ -823,6 +871,13 @@ class TradingBot:
                         else:
                             if my_code in self.missing_counts:
                                 del self.missing_counts[my_code]
+
+                            # 👇👇 [여기에 추가] 사용자님 아이디어 적용 구역 👇👇
+                            # 증권사의 실제 체결 매입 단가로 봇의 메모리를 지속적으로 덮어쓰기 교정
+                            real_avg_price = real_holdings[my_code]['price']
+                            if real_avg_price > 0:
+                                self.portfolio[my_code]['buy_price'] = real_avg_price
+                            # 👆👆 [추가 끝] 👆👆
                         
                         real_qty = real_holdings[my_code]['qty']
                         if real_qty < bot_qty:
@@ -834,7 +889,17 @@ class TradingBot:
                     for real_code, info in real_holdings.items():
                         # ✅ [수정] 블랙리스트 조건 삭제. 계좌에 있으면 무조건 관리 시작
                         if real_code not in self.portfolio:
-                            
+
+                            # 👇 [추가] VI 지연 등 미체결 방어 로직 (매도 후 10분간은 부활 금지)
+                            if real_code in self.pending_sells:
+                                elapsed_since_sell = (datetime.datetime.now() - self.pending_sells[real_code]).total_seconds()
+                                if elapsed_since_sell < 600: # 600초(10분) 이내면 방금 전 주문한 것으로 간주
+                                    continue # 무시하고 다음 종목으로 패스
+                                else:
+                                    # 10분이 지났는데도 잔고에 있으면 체결 실패로 보고 부활 절차 진행
+                                    del self.pending_sells[real_code]
+                            # 👆 [추가 끝]
+
                             # 만약 과거에 수급이탈이나 수동매도 착각으로 블랙리스트에 있었다면 삭제
                             if real_code in self.blacklist:
                                 del self.blacklist[real_code]
@@ -1035,8 +1100,8 @@ class TradingBot:
                             continue 
 
                     # 본전 이탈
-                    if info.get('has_partial_sold', False) and current_max < BotConfig.TS_TRIGGER_RATE and logic_profit_rate <= 0.0:
-                        codes_to_sell.append((my_code, "📉본전 이탈(익절 후 반납)"))
+                    if info.get('has_partial_sold', False) and current_max < BotConfig.TS_TRIGGER_RATE and logic_profit_rate <= 0.003:
+                        codes_to_sell.append((my_code, "📉본전 이탈(익절 후 반납, 0.3% 컷)"))
                         continue
                     
                     # --- [추가] 시간 손절 로직 ---
@@ -1193,6 +1258,10 @@ class TradingBot:
                 # ✅ [금액 포맷팅] 억 단위로 변환 (예: 15300000000 -> 153억)
                 pg_amt_str = f"{pg_amt_now // 100000000}억" if abs(pg_amt_now) >= 100000000 else f"{pg_amt_now // 1000000}백만"
 
+                # 👇 [추가] 당일 거래대금 계산 (알림용)
+                trade_amt = info.get('acml_vol', 0) * info['price']
+                trade_amt_str = f"{trade_amt // 100000000:,}억" if trade_amt >= 100000000 else f"{trade_amt // 1000000:,}백만"
+
                 if is_add_on:
                     old_qty = self.portfolio[code]['qty']
                     old_price = self.portfolio[code]['buy_price']
@@ -1217,11 +1286,12 @@ class TradingBot:
                            f"평단가: {old_price:,.0f}원 → {new_avg_price:,.0f}원\n"
                            f"🛑 리셋기준가: {info['price']:,.0f}원")
                 else:
+                    # 👇 [수정] VALUEKING 메시지에 당일 거래대금 추가
                     strategy_msg_map = {
                         'THEME': f"🔗 테마: {theme}\n👑 대장: {leader_name} {leader_rate_str}",
                         'PROGRAM': f"🤖 프로그램 매수 포착",
                         'MORNING': f"☀️ 모닝 급등 포착",
-                        'VALUEKING': f"💎 거래대금 주도주 포착"
+                        'VALUEKING': f"💎 거래대금 주도주 포착\n💵 거래대금: {trade_amt_str}"
                     }
                     detail_msg = strategy_msg_map.get(strategy_type, "")
 
@@ -1449,6 +1519,9 @@ class TradingBot:
                     'min_pg_amt': pg_amt_at_sell, # 매도 시점의 수급을 초기 저점으로 설정
                     'sell_time': datetime.datetime.now()
                 }
+
+                # 👇 [추가] 봇 메모리에서 지우기 전, '방금 팔았음'을 기록
+                self.pending_sells[code] = datetime.datetime.now()
                 
                 del self.portfolio[code]
                 self.save_state() # 👈 [추가] 매도 및 블랙리스트 등록 완료 후 즉시 저장
@@ -1480,6 +1553,10 @@ class TradingBot:
                         if str(chat_id) != str(config.TELEGRAM_CHAT_ID):
                             continue
 
+                        # 👇 [수정] 명령어를 파싱하여 분석
+                        parts = text.split()
+                        cmd = parts[0].lower()
+
                         # === 명령어 처리 로직 ===
                         if text == '/info' or text == 'info':
                             balance = self.api.fetch_balance()
@@ -1509,10 +1586,26 @@ class TradingBot:
                             self.is_buy_active = True
                             telegram_notifier.send_telegram_message("🟢 [원격제어] 매수 재개!")
 
-                        elif text == '/sell' or text == 'sell':
-                            # 기존: self.liquidate_all_positions()
-                            # 수정: 사유를 넘겨주어 메시지가 구분되게 함
-                            self.liquidate_all_positions(reason="원격제어 긴급매도")
+                        # 👇 [수정] 특정 종목 매도 기능 적용
+                        elif cmd == '/sell' or cmd == 'sell':
+                            if len(parts) > 1:
+                                target = parts[1] # '/sell 삼성전자'에서 '삼성전자' 추출
+                                target_code = None
+                                
+                                # 포트폴리오에서 이름이나 코드로 종목 찾기
+                                for code, info in self.portfolio.items():
+                                    if info['name'] == target or code == target:
+                                        target_code = code
+                                        break
+                                
+                                if target_code:
+                                    telegram_notifier.send_telegram_message(f"🚨 [원격제어] {target} 지정 매도 실행")
+                                    self.sell_stock(target_code, reason="원격 지정 매도")
+                                else:
+                                    telegram_notifier.send_telegram_message(f"❌ 보유 중인 종목 중에 '{target}'을(를) 찾을 수 없습니다.")
+                            else:
+                                # 종목명이 없으면 기존처럼 전체 청산
+                                self.liquidate_all_positions(reason="원격제어 긴급매도")
 
             except Exception as e:
                 print(f"텔레그램 리스너 에러: {e}")
@@ -1615,6 +1708,13 @@ class TradingBot:
 
                 if not pg_list and theme_list: pg_list = theme_list
                 
+                # 👇 [추가] 30분 단위 VALUEKING 종목 거래대금 로깅 기록
+                if now.minute % 30 == 0 and (self.last_value_log_time is None or now.minute != self.last_value_log_time.minute):
+                    self.log_value_list_volumes(value_list)
+                    self.last_value_log_time = now
+
+                if not pg_list and theme_list: pg_list = theme_list
+                
                 # 생존신고
                 if time.time() - self.last_summary_time >= 60:
                     summary_msg = (f"💓 [생존신고] {now.strftime('%H:%M')} | Slots:{current_slots}/6 | "
@@ -1625,15 +1725,15 @@ class TradingBot:
                 # ==================================================================
                 # 🔥 [전략 3] 프로그램 자이언트
                 # ==================================================================
-                if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
+
+                # 👇 [수정] 스위치 변수 추가
+                if BotConfig.ENABLE_PROGRAM and current_slots < BotConfig.MAX_GLOBAL_SLOTS:
                     for item in pg_list:
                         code = item['stck_shrn_iscd']
                         name = item['hts_kor_isnm']
                         
-                        # 1차 필터: 이름 기반 잡주 제외
-                        if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
-    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"):
-                            continue
+                        # 👇 [수정] 깔끔해진 제외 종목 필터
+                        if is_excluded_stock(name): continue
 
                         # 2차 필터: 거래대금 미달 제외
                         est_total_amt = item['price'] * item['vol']
@@ -1759,24 +1859,20 @@ class TradingBot:
                 # ==================================================================
                 # 🔥 [전략 4] 밸류 킹 (거래대금 상위 주도주)
                 # ==================================================================
-                if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
+
+                # 👇 [수정] 스위치 변수 추가 (14시 차단 조건 유지)
+                if BotConfig.ENABLE_VALUEKING and current_slots < BotConfig.MAX_GLOBAL_SLOTS and now.hour < 14:
                     if self.daily_buy_cnt.get('VALUEKING', 0) < BotConfig.MAX_DAILY_VALUE_KING:
                         for item in value_list:
                             code = item['stck_shrn_iscd']
                             name = item['hts_kor_isnm']
                             rate = item['prdy_ctrt']
 
-                            # ------------------------------------------------------
-                            # 1차 사전 필터 (API 호출 최소화로 봇 속도 극대화)
-                            # ------------------------------------------------------
                             if code in self.portfolio or code in self.blacklist: continue
                             if rate < BotConfig.VALUE_KING_RATE_MIN: continue
 
-                            # 이름 기반 잡주/ETF 제외
-                            if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", 
-    "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
-    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"):
-                                continue
+                            # 👇 [수정] 깔끔해진 제외 종목 필터
+                            if is_excluded_stock(name): continue
 
                             # ✅ [핵심 추가] API 호출 전, 조건검색 데이터로 거래대금 사전 차단
                             est_trade_amt = item['price'] * item['vol']
@@ -1793,8 +1889,10 @@ class TradingBot:
                                 dynamic_min_value = 100_000_000_000   # 1,000억 이상
                             elif elapsed <= 7200:   # 10:00 ~ 11:00
                                 dynamic_min_value = 150_000_000_000   # 1,500억 이상
-                            else:                   # 11:00 이후
+                            elif elapsed <= 25200:  # 11:00 ~ 15:00
                                 dynamic_min_value = 200_000_000_000   # 2,000억 이상
+                            else: # 15:00 이후
+                                dynamic_min_value = 900_000_000_000_000_000   # 9,000*100조 이상
 
                             est_trade_amt = item['price'] * item['vol']
                             
@@ -1809,6 +1907,14 @@ class TradingBot:
 
                             # 윗꼬리 필터링
                             if info['wick_ratio'] >= BotConfig.MAX_WICK_RATIO: continue
+
+                            # 👇 [추가] 자이언트 전략과 동일한 호가잔량 필터 (2억 이상)
+                            total_ask_val = info['total_ask'] * info['price']
+                            total_bid_val = info['total_bid'] * info['price']
+                            total_ask_bid = total_ask_val + total_bid_val
+                            
+                            if total_ask_bid < BotConfig.MIN_TOTAL_HOGA_AMT:
+                                continue
 
                             # 갭상승 필터링 (1% 이상)
                             prev_close = info['price'] / (1 + info['rate']/100)
@@ -1845,9 +1951,10 @@ class TradingBot:
                 # ==================================================================
                 # 🔥 [전략 1] 모닝 급등주 (사전 필터링 최적화 완료)
                 # ==================================================================
-                if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
+
+                # 👇 [수정] 스위치 변수 추가
+                if BotConfig.ENABLE_MORNING and current_slots < BotConfig.MAX_GLOBAL_SLOTS:
                     if elapsed <= BotConfig.MORNING_MSG_WINDOW:
-                        
                         if self.daily_buy_cnt['MORNING'] >= BotConfig.MAX_DAILY_MORNING:
                             pass 
                         else:
@@ -1874,8 +1981,9 @@ class TradingBot:
                                 if est_trade_vol < min_trade_vol: continue
                                 
                                 if not (BotConfig.MORNING_RATE_MIN <= rate <= BotConfig.MORNING_RATE_MAX): continue
-                                if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
-    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"): continue
+
+                                # 👇 [수정] 깔끔해진 제외 종목 필터
+                                if is_excluded_stock(name): continue
 
                                 valid_candidates.append({'code': code, 'name': name, 'rate': rate})
 
@@ -1907,23 +2015,23 @@ class TradingBot:
                 # ==================================================================
                 # 🔥 [전략 2] 테마 짝짓기 (대장주 API 조회 획기적 축소)
                 # ==================================================================
-                if current_slots < BotConfig.MAX_GLOBAL_SLOTS:
+
+                # 👇 [수정] 스위치 변수 추가
+                if BotConfig.ENABLE_THEME and current_slots < BotConfig.MAX_GLOBAL_SLOTS:
                     if elapsed <= BotConfig.THEME_MSG_WINDOW:
-                        
                         if self.daily_buy_cnt['THEME'] >= BotConfig.MAX_DAILY_THEME:
                             pass 
                         else:
                             theme_groups = {}
                             
-                            # 테마 그룹핑 (기존 유지)
                             for item in theme_list:
                                 code = item['stck_shrn_iscd']
                                 name = item['hts_kor_isnm']
                                 rate = item['prdy_ctrt']
                                 
-                                if any(x in name for x in ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", 
-    "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]) or name.endswith("우"): continue
-                                
+                                # 👇 [수정] 깔끔해진 제외 종목 필터
+                                if is_excluded_stock(name): continue
+
                                 if code in self.reverse_theme_map:
                                     themes = self.reverse_theme_map[code]
                                     for theme in themes:

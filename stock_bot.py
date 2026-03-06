@@ -159,14 +159,14 @@ class BotConfig:
     THEME_MSG_WINDOW   = 36000  #테마전략 하루종일
     
     # ⚔️ [모닝 전략]
-    MORNING_GAP_MIN = 1.0     
-    MORNING_GAP_MAX = 12.0    
-    MORNING_RATE_MIN = 5.0    
-    MORNING_RATE_MAX = 15.0   
+    MORNING_GAP_MIN = 10.0     
+    MORNING_GAP_MAX = 18.0    
+    MORNING_RATE_MIN = 10.0    
+    MORNING_RATE_MAX = 24.0   
     
     # ⚔️ [자이언트 전략 등락률 범위]
     GIANT_RATE_MIN = 3.0
-    GIANT_RATE_MAX = 28.0       # 상한가 종목 제외
+    GIANT_RATE_MAX = 24.0       # 상한가 종목 제외
 
     # ✅ [추가] 프로그램 자이언트용 최소 호가 총잔량 금액 (기본 1억)
     MIN_TOTAL_HOGA_AMT = 200_000_000
@@ -189,6 +189,7 @@ class BotConfig:
     # ⚔️ [밸류 킹 전략]
     VALUE_KING_GAP_MIN = 1.0     # 갭 1% 이상
     VALUE_KING_RATE_MIN = 3.0    # 현재가 3% 이상
+    VALUE_KING_RATE_MAX = 24.0
 
     # ✅ [VALUE_KING 기준] 당일 거래대금 500억 원 이상
     VALUE_KING_MIN_VALUE = 50_000_000_000
@@ -1835,7 +1836,7 @@ class TradingBot:
 
                         if info['rate'] < BotConfig.GIANT_RATE_MIN: continue
                         if info['rate'] > BotConfig.GIANT_RATE_MAX: continue
-                        if info['price'] < info['open']: continue
+                        if info['price'] < (info['open'] * 1.03): continue
                         if info['wick_ratio'] >= BotConfig.MAX_WICK_RATIO: continue
 
                         # ✅ [추가됨] 호가 잔량 10억 이상 조건
@@ -1870,6 +1871,7 @@ class TradingBot:
 
                             if code in self.portfolio or code in self.blacklist: continue
                             if rate < BotConfig.VALUE_KING_RATE_MIN: continue
+                            if rate > BotConfig.VALUE_KING_RATE_MAX: continue
 
                             # 👇 [수정] 깔끔해진 제외 종목 필터
                             if is_excluded_stock(name): continue
@@ -1921,9 +1923,12 @@ class TradingBot:
                             gap_rate = (info['open'] - prev_close) / prev_close * 100
                             if gap_rate < BotConfig.VALUE_KING_GAP_MIN: continue
 
-                            is_pg_ok = True
+                            # 👇 [여기에 한 줄 추가] 시가 대비 3% 이상 상승 시에만 진입 허용
+                            if info['price'] < (info['open'] * 1.03): continue
 
-                            '''
+                            # is_pg_ok = True
+
+                            # '''
                             # ------------------------------------------------------
                             # 프로그램 수급 융통성 (삼성전자/하이닉스 대응)
                             # ------------------------------------------------------
@@ -1934,11 +1939,12 @@ class TradingBot:
                             if pg_amt > 0: 
                                 is_pg_ok = True # 프로그램 매수 중이면 1차 통과
                             else:
+                                # is_pg_ok = False
                                 # 프로그램 매도 중이어도 매도 규모가 총 거래대금의 5% 미만이면 통과
                                 # (만약 프로그램 완전 무시하고 무조건 진입하려면 아래 줄을 if True: 로 변경)
                                 if abs(pg_amt) < (total_trade_amt * BotConfig.VALUE_KING_PG_SELL_LIMIT_RATIO):
                                     is_pg_ok = True
-                            '''
+                            # '''
 
                             # ------------------------------------------------------
                             # 최종 진입

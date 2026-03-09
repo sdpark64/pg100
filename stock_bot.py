@@ -143,7 +143,7 @@ class BotConfig:
     THEME_BUY_TIMEOUT = 30    
 
     # 🚫 [필터]
-    MIN_STOCK_PRICE = 1000
+    MIN_STOCK_PRICE = 5000
 
     # 🛡️ 안전장치
     MIN_HOGA_AMT = 50_000_000 
@@ -174,7 +174,7 @@ class BotConfig:
     # 🛡️ [매도/청산 조건]
     PARTIAL_PROFIT_RATE = 0.02  # 수익률 2% 부분익절
     PARTIAL_SELL_RATIO = 0.5    # 부분익절, 절반매도
-    STOP_LOSS_RATE = -0.015  # 손절 -1.5%      
+    STOP_LOSS_RATE = -0.02  # 손절 -1.5%      
     TARGET_PROFIT = 0.29        
     
     TS_TRIGGER_RATE = 0.04  
@@ -1122,7 +1122,7 @@ class TradingBot:
                     
                     # 모닝 전략은 변동성이 크므로 손절을 짧게 -1%로 설정
                     if strategy == 'MORNING':
-                        target_stop_loss = -0.01
+                        target_stop_loss = -0.015
 
                     # 손절
                     if logic_profit_rate <= target_stop_loss:
@@ -1719,7 +1719,7 @@ class TradingBot:
                 # 생존신고
                 if time.time() - self.last_summary_time >= 60:
                     summary_msg = (f"💓 [생존신고] {now.strftime('%H:%M')} | Slots:{current_slots}/6 | "
-                                   f"PG:{len(pg_list)} Theme:{len(theme_list)} Gap:{len(morning_list)}")
+                                   f"PG:{len(pg_list)} Value:{len(value_list)} Morning:{len(morning_list)} Theme:{len(theme_list)}")
                     print(summary_msg)
                     self.last_summary_time = time.time()
                 

@@ -98,7 +98,7 @@ class BotConfig:
     # ⚙️ [전략 실행 스위치] (True: 켜기, False: 끄기)
     ENABLE_PROGRAM = True
     ENABLE_VALUEKING = True
-    ENABLE_MORNING = True
+    ENABLE_MORNING = False
     ENABLE_THEME = True
 
     # 🚫 [제외 종목 키워드 중앙 집중화]
@@ -193,6 +193,9 @@ class BotConfig:
 
     # ✅ [VALUE_KING 기준] 당일 거래대금 500억 원 이상
     VALUE_KING_MIN_VALUE = 50_000_000_000
+
+    # ✅ [추가] 밸류킹 진입 시작 시간 (13시부터 작동)
+    VALUEKING_START_HOUR = 13
 
     # 프로그램 순매도 허용 한도 (거래대금의 5% 이내면 매도 중이어도 진입)
     VALUE_KING_PG_SELL_LIMIT_RATIO = 0.05
@@ -1436,7 +1439,7 @@ class TradingBot:
                 self.market_open_time = now.replace(hour=9, minute=0, second=0, microsecond=0)
                 telegram_notifier.send_telegram_message(f"🔔 [지연/정상] 10:00 Market Active.\n(Vol: {vol:,})")
                 return True
-            time.sleep(1)
+            time.sleep(0.1)
             
     def sell_stock(self, code, reason):
         if code in self.portfolio:
@@ -1447,7 +1450,7 @@ class TradingBot:
 
             # 2. 실패 시 1번 더 재시도 (0.2초 대기)
             if not temp_info:
-                time.sleep(0.2)
+                time.sleep(0.1)
                 temp_info = self.api.fetch_price_detail(code)
 
             pg_amt_at_sell = 0
@@ -1703,9 +1706,13 @@ class TradingBot:
 
                 # 📥 [3-Track 리스트 수집]
                 pg_list = self.api.fetch_condition_stocks("pg100")
+                time.sleep(0.1)
                 theme_list = self.api.fetch_condition_stocks("top100")
+                time.sleep(0.1)
                 morning_list = self.api.fetch_condition_stocks("hot100")
+                time.sleep(0.1)
                 value_list = self.api.fetch_condition_stocks("value") # 👈 추가 (조건식 이름: value)
+                time.sleep(0.1)
 
                 if not pg_list and theme_list: pg_list = theme_list
                 
@@ -1740,6 +1747,9 @@ class TradingBot:
                         est_total_amt = item['price'] * item['vol']
                         if est_total_amt < (BotConfig.PG_LEVEL_0_AMT * 0.9): 
                             continue 
+
+                        # ✅ [추가] 최소 주가 필터 (동전주/잡주 컷)
+                        if item['price'] < BotConfig.MIN_STOCK_PRICE: continue
                         
                         # ✅ [핵심 최적화] API 호출 전에, 조건검색 데이터만으로 먼저 거르기!
                         item_rate = item.get('prdy_ctrt', 0.0)
@@ -1863,7 +1873,8 @@ class TradingBot:
 
                 # 👇 [수정] 스위치 변수 추가 (14시 차단 조건 유지)
                 if BotConfig.ENABLE_VALUEKING and current_slots < BotConfig.MAX_GLOBAL_SLOTS and now.hour < 14:
-                    if self.daily_buy_cnt.get('VALUEKING', 0) < BotConfig.MAX_DAILY_VALUE_KING:
+                    # ✅ [수정] 기존 '매수 횟수 제한' 조건에 '13시 이후' 조건을 and 로 연결!
+                    if (self.daily_buy_cnt.get('VALUEKING', 0) < BotConfig.MAX_DAILY_VALUE_KING) and (now.hour >= BotConfig.VALUEKING_START_HOUR):
                         for item in value_list:
                             code = item['stck_shrn_iscd']
                             name = item['hts_kor_isnm']
@@ -1872,6 +1883,9 @@ class TradingBot:
                             if code in self.portfolio or code in self.blacklist: continue
                             if rate < BotConfig.VALUE_KING_RATE_MIN: continue
                             if rate > BotConfig.VALUE_KING_RATE_MAX: continue
+
+                            # ✅ [추가] 최소 주가 필터 (동전주/잡주 컷)
+                            if item['price'] < BotConfig.MIN_STOCK_PRICE: continue
 
                             # 👇 [수정] 깔끔해진 제외 종목 필터
                             if is_excluded_stock(name): continue
@@ -1885,20 +1899,26 @@ class TradingBot:
                             # 시간대별 거래대금 가변 필터 (핵심)
                             # ------------------------------------------------------
                             # elapsed: 장 개장(09:00) 후 흐른 시간(초)
-                            if elapsed <= 1800:     # 09:00 ~ 09:30
-                                dynamic_min_value = 50_000_000_000    # 500억 이상
-                            elif elapsed <= 3600:   # 09:30 ~ 10:00
-                                dynamic_min_value = 100_000_000_000   # 1,000억 이상
-                            elif elapsed <= 7200:   # 10:00 ~ 11:00
-                                dynamic_min_value = 150_000_000_000   # 1,500억 이상
-                            elif elapsed <= 25200:  # 11:00 ~ 15:00
-                                dynamic_min_value = 200_000_000_000   # 2,000억 이상
-                            else: # 15:00 이후
-                                dynamic_min_value = 900_000_000_000_000_000   # 9,000*100조 이상
+                            # if elapsed <= 1800:     # 09:00 ~ 09:30
+                                # dynamic_min_value = 50_000_000_000    # 500억 이상
+                            # elif elapsed <= 3600:   # 09:30 ~ 10:00
+                                # dynamic_min_value = 100_000_000_000   # 1,000억 이상
+                            # elif elapsed <= 7200:   # 10:00 ~ 11:00
+                                # dynamic_min_value = 150_000_000_000   # 1,500억 이상
+                            # elif elapsed <= 25200:  # 11:00 ~ 15:00
+                                # dynamic_min_value = 200_000_000_000   # 2,000억 이상
+                            # else: # 15:00 이후
+                                # dynamic_min_value = 900_000_000_000_000_000   # 9,000*100조 이상
+
+                            dv1 = 50_000_000_000
+                            dv2 = 100_000_000_000
+                            dv3 = 150_000_000_000
+                            dv4 = 300_000_000_000
 
                             est_trade_amt = item['price'] * item['vol']
                             
-                            if est_trade_amt < dynamic_min_value: 
+                            if (est_trade_amt < dv3
+                                or est_trade_amt > dv4):
                                 continue
 
                             # ------------------------------------------------------
@@ -1958,16 +1978,20 @@ class TradingBot:
                 # 🔥 [전략 1] 모닝 급등주 (사전 필터링 최적화 완료)
                 # ==================================================================
 
-                # 👇 [수정] 스위치 변수 추가
                 if BotConfig.ENABLE_MORNING and current_slots < BotConfig.MAX_GLOBAL_SLOTS:
-                    if elapsed <= BotConfig.MORNING_MSG_WINDOW:
+                    # ✅ [수정] 절대 시간(now.hour) 사용: 9시 구간(09:00~09:59)에만 작동
+                    if now.hour == 9:
                         if self.daily_buy_cnt['MORNING'] >= BotConfig.MAX_DAILY_MORNING:
                             pass 
                         else:
-                            min_trade_vol = BotConfig.MORNING_VOL_LEVEL_3 
-                            if elapsed <= 600: min_trade_vol = BotConfig.MORNING_VOL_LEVEL_1 
-                            elif elapsed <= 1800: min_trade_vol = BotConfig.MORNING_VOL_LEVEL_2 
-                            
+                            # ✅ [수정] 현재 '분(minute)'을 기준으로 정확하게 통제
+                            if now.minute < 10:
+                                min_trade_vol = BotConfig.MORNING_VOL_LEVEL_1 
+                            elif now.minute < 30:
+                                min_trade_vol = BotConfig.MORNING_VOL_LEVEL_2 
+                            else:
+                                min_trade_vol = BotConfig.MORNING_VOL_LEVEL_3 
+
                             valid_candidates = []
                             for item in morning_list:
                                 code = item['stck_shrn_iscd']

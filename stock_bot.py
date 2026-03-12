@@ -650,7 +650,6 @@ class TradingBot:
     def log_value_list_volumes(self, value_list):
         if not value_list: return
         
-        # 파일명은 날짜별로 생성 (예: value_volume_log_20260305.csv)
         filename = f"value_volume_log_{datetime.datetime.now().strftime('%Y%m%d')}.csv"
         file_exists = os.path.isfile(filename)
         now_str = datetime.datetime.now().strftime("%H:%M:%S")
@@ -659,7 +658,8 @@ class TradingBot:
             with open(filename, mode='a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    writer.writerow(['Time', 'Code', 'Name', 'Price', 'Volume', 'Trade_Amt(100M)', 'Rate(%)'])
+                    # ✅ [수정] PG_Amt(100M) 열 추가
+                    writer.writerow(['Time', 'Code', 'Name', 'Price', 'Volume', 'Trade_Amt(100M)', 'Rate(%)', 'PG_Amt(100M)'])
                 
                 for item in value_list:
                     code = item.get('stck_shrn_iscd', '')
@@ -668,13 +668,20 @@ class TradingBot:
                     vol = item.get('vol', 0)
                     rate = item.get('prdy_ctrt', 0.0)
                     
-                    # 거래대금 계산 (억 단위 표기용)
                     trade_amt = price * vol
                     trade_amt_100m = trade_amt // 100000000
                     
-                    writer.writerow([now_str, code, name, price, vol, trade_amt_100m, rate])
+                    pg_amt_100m = 0
                     
-            print(f"📝 [데이터 수집] {now_str} 기준 VALUEKING 후보 {len(value_list)}종목 거래대금 로깅 완료.")
+                    # ✅ [수정] API 과부하 방지: 거래대금 500억 이상일 때만 프로그램 수급 조회
+                    if trade_amt_100m >= 500:
+                        info = self.api.fetch_price_detail(code, name)
+                        if info:
+                            pg_amt_100m = (info['program_buy'] * info['price']) // 100000000
+                            
+                    writer.writerow([now_str, code, name, price, vol, trade_amt_100m, rate, pg_amt_100m])
+                    
+            print(f"📝 [데이터 수집] {now_str} 기준 VALUEKING 후보 {len(value_list)}종목 로깅 완료.")
         except Exception as e:
             print(f"⚠️ [로그 실패] 거래대금 기록 중 오류: {e}")
 
@@ -1389,7 +1396,12 @@ class TradingBot:
             self.missing_counts = {}
             
             self.market_open_time = None
-            time.sleep(wait_seconds)
+            while True:
+                now = datetime.datetime.now()
+                # 다음날 오전 8시 50분이 되면 루프 탈출
+                if now >= next_morning:
+                    break
+                time.sleep(10) # 10초마다 체크
             telegram_notifier.send_telegram_message(f"☀️ [{MODE}] 봇 기상! 시장 개장 감시 시작.")
 
     def wait_for_market_open(self):
@@ -1701,7 +1713,6 @@ class TradingBot:
                     if not is_open: continue 
                     self.load_theme_map()
                 
-                elapsed = (datetime.datetime.now() - self.market_open_time).total_seconds()
                 current_slots = self.get_current_slots_used()
 
                 # 📥 [3-Track 리스트 수집]
@@ -2048,86 +2059,85 @@ class TradingBot:
 
                 # 👇 [수정] 스위치 변수 추가
                 if BotConfig.ENABLE_THEME and current_slots < BotConfig.MAX_GLOBAL_SLOTS:
-                    if elapsed <= BotConfig.THEME_MSG_WINDOW:
-                        if self.daily_buy_cnt['THEME'] >= BotConfig.MAX_DAILY_THEME:
-                            pass 
-                        else:
-                            theme_groups = {}
+                    if self.daily_buy_cnt['THEME'] >= BotConfig.MAX_DAILY_THEME:
+                        pass 
+                    else:
+                        theme_groups = {}
                             
-                            for item in theme_list:
-                                code = item['stck_shrn_iscd']
-                                name = item['hts_kor_isnm']
-                                rate = item['prdy_ctrt']
+                        for item in theme_list:
+                            code = item['stck_shrn_iscd']
+                            name = item['hts_kor_isnm']
+                            rate = item['prdy_ctrt']
                                 
-                                # 👇 [수정] 깔끔해진 제외 종목 필터
-                                if is_excluded_stock(name): continue
+                            # 👇 [수정] 깔끔해진 제외 종목 필터
+                            if is_excluded_stock(name): continue
 
-                                if code in self.reverse_theme_map:
-                                    themes = self.reverse_theme_map[code]
-                                    for theme in themes:
-                                        if theme not in theme_groups: theme_groups[theme] = []
-                                        theme_groups[theme].append({'code': code, 'name': name, 'rate': rate, 'price': item['price']})
+                            if code in self.reverse_theme_map:
+                                themes = self.reverse_theme_map[code]
+                                for theme in themes:
+                                    if theme not in theme_groups: theme_groups[theme] = []
+                                    theme_groups[theme].append({'code': code, 'name': name, 'rate': rate, 'price': item['price']})
                                         
-                            for theme, stocks in theme_groups.items():
-                                if theme in self.bought_themes: continue
+                        for theme, stocks in theme_groups.items():
+                            if theme in self.bought_themes: continue
                                     
-                                if len(stocks) >= 2:
-                                    stocks.sort(key=lambda x: x['rate'], reverse=True)
-                                    leader = stocks[0]
-                                    follower = stocks[1]
+                            if len(stocks) >= 2:
+                                stocks.sort(key=lambda x: x['rate'], reverse=True)
+                                leader = stocks[0]
+                                follower = stocks[1]
                                     
-                                    # 1차 필터: 가격 및 블랙리스트 차단 (API 안 부름)
-                                    if leader['price'] < BotConfig.MIN_STOCK_PRICE: continue
-                                    if follower['price'] < BotConfig.MIN_STOCK_PRICE: continue
-                                    if follower['code'] in self.portfolio: continue
+                                # 1차 필터: 가격 및 블랙리스트 차단 (API 안 부름)
+                                if leader['price'] < BotConfig.MIN_STOCK_PRICE: continue
+                                if follower['price'] < BotConfig.MIN_STOCK_PRICE: continue
+                                if follower['code'] in self.portfolio: continue
                                     
-                                    if follower['code'] in self.blacklist:
-                                        sell_time = self.blacklist[follower['code']].get('sell_time')
-                                        if sell_time and (now - sell_time).total_seconds() / 60 < BotConfig.REBUY_COOLTIME_MINUTES: continue
+                                if follower['code'] in self.blacklist:
+                                    sell_time = self.blacklist[follower['code']].get('sell_time')
+                                    if sell_time and (now - sell_time).total_seconds() / 60 < BotConfig.REBUY_COOLTIME_MINUTES: continue
                                     
-                                    # ✅ [핵심 최적화] 대장주의 등락률이 28% 미만이고, 상한가 풀림(Timeout) 대기열에도 없다면 
-                                    # 상한가일 리가 없으므로 API 조회 없이 즉시 패스 (속도 엄청 빨라짐!)
-                                    if leader['rate'] < 28.0 and theme not in self.locked_leaders_time:
+                                # ✅ [핵심 최적화] 대장주의 등락률이 28% 미만이고, 상한가 풀림(Timeout) 대기열에도 없다면 
+                                # 상한가일 리가 없으므로 API 조회 없이 즉시 패스 (속도 엄청 빨라짐!)
+                                if leader['rate'] < 28.0 and theme not in self.locked_leaders_time:
+                                    continue
+
+                                # 🎯 대장주가 진짜 상한가 근처일 때만 API로 정확한 상한가 여부 확인
+                                leader_info = self.api.fetch_price_detail(leader['code'], leader['name'])
+                                if not leader_info: continue
+                                    
+                                is_limit_up = (leader_info['price'] >= leader_info['max_price'])
+                                    
+                                if is_limit_up:
+                                    if theme not in self.locked_leaders_time:
+                                        self.locked_leaders_time[theme] = datetime.datetime.now()
+                                        
+                                    lock_duration = (datetime.datetime.now() - self.locked_leaders_time[theme]).total_seconds()
+                                        
+                                    if lock_duration > BotConfig.THEME_BUY_TIMEOUT:
+                                        self.bought_themes.add(theme)
                                         continue
+                                else:
+                                    if theme in self.locked_leaders_time:
+                                        del self.locked_leaders_time[theme]
+                                    continue 
 
-                                    # 🎯 대장주가 진짜 상한가 근처일 때만 API로 정확한 상한가 여부 확인
-                                    leader_info = self.api.fetch_price_detail(leader['code'], leader['name'])
-                                    if not leader_info: continue
+                                # 대장주 조건이 성립했을 때 비로소 2등주(Follower) API 호출
+                                follower_info = self.api.fetch_price_detail(follower['code'], follower['name'])
+                                if not follower_info: continue
+                                if follower_info['wick_ratio'] >= BotConfig.MAX_WICK_RATIO: continue
+
+                                ask_1_amount = follower_info['price'] * follower_info['ask_rsqn1']
+                                bid_1_amount = follower_info['price'] * follower_info['bid_rsqn1']
+                                if ask_1_amount < BotConfig.MIN_HOGA_AMT or bid_1_amount < BotConfig.MIN_HOGA_AMT: continue
                                     
-                                    is_limit_up = (leader_info['price'] >= leader_info['max_price'])
-                                    
-                                    if is_limit_up:
-                                        if theme not in self.locked_leaders_time:
-                                            self.locked_leaders_time[theme] = datetime.datetime.now()
-                                        
-                                        lock_duration = (datetime.datetime.now() - self.locked_leaders_time[theme]).total_seconds()
-                                        
-                                        if lock_duration > BotConfig.THEME_BUY_TIMEOUT:
-                                            self.bought_themes.add(theme)
-                                            continue
-                                    else:
-                                        if theme in self.locked_leaders_time:
-                                            del self.locked_leaders_time[theme]
-                                        continue 
+                                if follower_info['price'] < follower_info['open']: continue
 
-                                    # 대장주 조건이 성립했을 때 비로소 2등주(Follower) API 호출
-                                    follower_info = self.api.fetch_price_detail(follower['code'], follower['name'])
-                                    if not follower_info: continue
-                                    if follower_info['wick_ratio'] >= BotConfig.MAX_WICK_RATIO: continue
+                                is_ask_wall_good = 20.0 <= follower_info['bid_ask_ratio'] <= 90.0
+                                
+                                if is_ask_wall_good:
+                                    self.execute_buy(follower, theme, leader, 'THEME')
+                                    if self.get_current_slots_used() != current_slots: break
 
-                                    ask_1_amount = follower_info['price'] * follower_info['ask_rsqn1']
-                                    bid_1_amount = follower_info['price'] * follower_info['bid_rsqn1']
-                                    if ask_1_amount < BotConfig.MIN_HOGA_AMT or bid_1_amount < BotConfig.MIN_HOGA_AMT: continue
-                                    
-                                    if follower_info['price'] < follower_info['open']: continue
-
-                                    is_ask_wall_good = 20.0 <= follower_info['bid_ask_ratio'] <= 90.0
-                                    
-                                    if is_ask_wall_good:
-                                        self.execute_buy(follower, theme, leader, 'THEME')
-                                        if self.get_current_slots_used() != current_slots: break
-
-                time.sleep(config.TIME_SLEEP)
+                time.sleep(0.1)
                 
             except Exception as e:
                 print(f"Loop Error: {e}")
@@ -2136,4 +2146,3 @@ class TradingBot:
 if __name__ == "__main__":
     bot = TradingBot()
     bot.run()
-

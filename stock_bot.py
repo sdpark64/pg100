@@ -1725,15 +1725,11 @@ class TradingBot:
                 value_list = self.api.fetch_condition_stocks("value") # 👈 추가 (조건식 이름: value)
                 time.sleep(0.1)
 
-                if not pg_list and theme_list: pg_list = theme_list
-                
                 # 👇 [추가] 30분 단위 VALUEKING 종목 거래대금 로깅 기록
                 if now.minute % 30 == 0 and (self.last_value_log_time is None or now.minute != self.last_value_log_time.minute):
                     self.log_value_list_volumes(value_list)
                     self.last_value_log_time = now
 
-                if not pg_list and theme_list: pg_list = theme_list
-                
                 # 생존신고
                 if time.time() - self.last_summary_time >= 60:
                     summary_msg = (f"💓 [생존신고] {now.strftime('%H:%M')} | Slots:{current_slots}/6 | "

@@ -1,3 +1,3 @@
 git add .
-git commit -m "코드오류 수정"
+git commit -m "pg list 대체코드 삭제"
 git push -u origin main

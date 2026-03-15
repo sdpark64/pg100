@@ -1948,7 +1948,7 @@ class TradingBot:
                             # 갭상승 필터링 (1% 이상)
                             prev_close = info['price'] / (1 + info['rate']/100)
                             gap_rate = (info['open'] - prev_close) / prev_close * 100
-                            if gap_rate < BotConfig.VALUE_KING_GAP_MIN: continue
+                            # if gap_rate < BotConfig.VALUE_KING_GAP_MIN: continue
 
                             # 👇 [여기에 한 줄 추가] 시가 대비 3% 이상 상승 시에만 진입 허용
                             if info['price'] < (info['open'] * 1.03): continue

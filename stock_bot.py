@@ -47,8 +47,8 @@ def print(*args, **kwargs):
 # ==============================================================================
 # 🕹️ [모드 설정]
 # ==============================================================================
-MODE = "REAL"   # 실전투자
-# MODE = "MOCK"   # 모의투자
+# MODE = "REAL"   # 실전투자
+MODE = "MOCK"   # 모의투자
 
 if MODE == "REAL":
     config.TELEGRAM_BOT_TOKEN = config.REAL_TELEGRAM_BOT_TOKEN
@@ -640,7 +640,7 @@ class TradingBot:
         threading.Thread(target=self.telegram_listener, daemon=True).start()
         threading.Thread(target=self.start_websocket, daemon=True).start()
         
-        telegram_notifier.send_telegram_message(f"🚀 Value-King [{MODE}] 하이브리드(WS+REST) 봇 시작")
+        telegram_notifier.send_telegram_message(f"🚀 VALUE-KING [{MODE}] 하이브리드(WS+REST) 봇 시작")
 
         while True:
             try:

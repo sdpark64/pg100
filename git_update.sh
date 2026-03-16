@@ -1,3 +1,3 @@
 git add .
-git commit -m "밸류킹 갭조건 삭제"
+git commit -m "전략단순화, 웹소켓 활용"
 git push -u origin main

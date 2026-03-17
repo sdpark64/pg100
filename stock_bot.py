@@ -526,41 +526,55 @@ class TradingBot:
         code = info['code']
         total_asset = self.api.fetch_balance()
         invest_amount = int(total_asset * BotConfig.INVEST_RATIO)
-        qty = int(invest_amount / info['price']) if info['price'] > 0 else 0
+        
+        # 💡 [수정] 수량 계산은 진입 직전가 기준
+        expected_price = info['price'] 
+        qty = int(invest_amount / expected_price) if expected_price > 0 else 0
 
         if qty > 0:
-            target_price = info.get('ask_price_1', info['price'])
-            if target_price == 0: target_price = info['price']
-
-            res = self.api.send_order(code, qty, price=target_price, is_buy=True)
+            res = self.api.send_order(code, qty, price=0, is_buy=True) # 시장가(0) 주문
             if res['rt_cd'] == '0':
-                pg_amt_now = info.get('program_buy', 0) * info['price']
+                
+                # 🛡️ [핵심 수정] 매수 직후 0.5초 대기 후 잔고를 즉시 조회하여 '진짜 체결 평단가'를 가져옴
+                time.sleep(0.5) 
+                real_holdings = self.api.fetch_my_stock_list()
+                
+                # 실제 체결가가 확인되면 적용, 혹시 조회가 실패하면 임시가 적용
+                actual_buy_price = expected_price
+                if real_holdings and code in real_holdings:
+                    actual_buy_price = real_holdings[code]['price']
+
+                pg_amt_now = info.get('program_buy', 0) * expected_price
+                
                 self.portfolio[code] = {
-                    'name': info['name'], 'qty': qty, 'buy_price': info['price'], 
+                    'name': info['name'], 'qty': qty, 
+                    'buy_price': actual_buy_price,  # 👈 진짜 체결가로 완벽하게 기록
                     'strategy': 'VALUEKING', 'max_profit_rate': 0.0, 'has_partial_sold': False, 
                     'buy_time': datetime.datetime.now(), 'open_price': info['open'],
-                    'current_price': info['price'], 
+                    'current_price': actual_buy_price, 
                     
-                    # 통계 저장 (매도 로그 연동)
                     'stats_entry_pg': pg_amt_now, 'stats_max_pg': pg_amt_now,        
-                    'stats_max_price': info['price'], 'stats_min_price': info['price']
+                    'stats_max_price': actual_buy_price, 'stats_min_price': actual_buy_price
                 }
                 
-                # 📡 매수 직후 웹소켓 감시망 등록
                 self.ws_subscribe(code, "1")
                 
-                trade_amt_str = f"{(info.get('acml_vol', 0) * info['price']) // 100000000:,}억"
-                msg = (f"⚡ [{MODE} 초기수급 포착 진입] {info['name']}\n💰 매수가: {info['price']:,}원\n💵 거래대금: {trade_amt_str}\n📦 수량: {qty}주")
+                trade_amt_str = f"{(info.get('acml_vol', 0) * expected_price) // 100000000:,}억"
+                # 텔레그램 알림에도 실제 체결가를 반영
+                msg = (f"⚡ [{MODE} 수급 포착 진입] {info['name']}\n"
+                       f"🎯 예상가: {expected_price:,}원\n"
+                       f"💰 체결가: {actual_buy_price:,}원\n"
+                       f"💵 거래대금: {trade_amt_str}\n"
+                       f"📦 수량: {qty}주")
                 telegram_notifier.send_telegram_message(msg)
                 
-                # 원본 코드의 매수 로그 기능 유지
                 trade_logger.log_buy({
                     'code': code, 'name': info['name'], 'strategy': 'VALUEKING', 'level': 0,
-                    'price': info['price'], 'qty': qty, 'pg_amt': pg_amt_now, 'gap': info.get('rate', 0), 'leader': ''
+                    'price': actual_buy_price, 'qty': qty, 'pg_amt': pg_amt_now, 'gap': info.get('rate', 0), 'leader': ''
                 })
                 
                 self.save_state()
-                self.blacklist[code] = "BOUGHT_TODAY" # 중복 진입 원천 차단
+                self.blacklist[code] = "BOUGHT_TODAY" 
 
     def liquidate_all_positions(self, reason="장 마감(Time-Cut)"): 
         if not self.portfolio: return

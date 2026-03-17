@@ -1,3 +1,3 @@
 git add .
-git commit -m "전략단순화, 웹소켓 활용"
+git commit -m "체결가 동기화 수정"
 git push -u origin main

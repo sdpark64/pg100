@@ -39,10 +39,33 @@ def setup_logging():
 
 logger = setup_logging()
 
-original_print = print
-def print(*args, **kwargs):
-    msg = " ".join(map(str, args))
-    logger.info(msg)
+# original_print = print
+# def print(*args, **kwargs):
+    # msg = " ".join(map(str, args))
+    # logger.info(msg)
+
+# ==============================================================================
+# 📝 [시스템 표준 입출력 로거 리다이렉션]
+# ==============================================================================
+class StreamToLogger:
+    def __init__(self, logger, log_level=logging.INFO):
+        self.logger = logger
+        self.log_level = log_level
+
+    def write(self, buf):
+        # 개행 문자를 기준으로 나누어 로그로 기록 (빈 줄 무시)
+        for line in buf.rstrip().splitlines():
+            if line.strip():
+                self.logger.log(self.log_level, line.strip())
+
+    def flush(self):
+        pass
+
+# 1. 모든 일반 print 출력과 표준 출력을 INFO 레벨로 가로채기
+sys.stdout = StreamToLogger(logger, logging.INFO)
+
+# 2. 모든 파이썬 에러 메시지(Traceback)를 ERROR 레벨로 가로채기
+sys.stderr = StreamToLogger(logger, logging.ERROR)
 
 # ==============================================================================
 # 🕹️ [모드 설정]
@@ -86,6 +109,7 @@ class BotConfig:
     VALUEKING_START_HOUR = 9     
     VALUEKING_END_HOUR = 9       
     VALUEKING_END_MINUTE = 30
+    VALUE_KING_MIN_VALUE = 1_000_000_000
     VALUE_KING_MAX_VALUE = 30_000_000_000 # 누적 거래대금 300억 이하 공략
     MAX_RATE_LIMIT = 15.0  # 👈 [추가] 너무 높은 고점(+15% 초과) 추격 매수 금지 상한선
 
@@ -639,6 +663,11 @@ class TradingBot:
                 self.ws_subscribe(code, "2") # 📡 웹소켓 구독 즉시 해제
                 del self.portfolio[code]
                 self.save_state()
+            else:
+                # 👇 [핵심 추가] API 주문 거절/실패 시 잠금 해제하여 다음 틱에서 재시도할 수 있게 복구
+                if code in self.pending_sells:
+                    del self.pending_sells[code]
+                print(f"⚠️ 매도 주문 실패 [{code}]: {res.get('msg1')} - 다음 루프에서 재시도합니다.")
 
     # ----------------------------------------------------------------------
     # 📱 텔레그램 리스너 (실시간 수익률 표출 적용)
@@ -730,6 +759,22 @@ class TradingBot:
                         # 👇 [반드시 추가해야 할 2줄] 윗꼬리 추격 매수 및 음봉 회피
                         if info['price'] < info['open']: continue                # 양봉(시가 위) 필수 조건
                         if info['rate'] > BotConfig.MAX_RATE_LIMIT: continue
+
+                        # =========================================================================
+                        # 👇 [신규 추가] 09:01 이후 & 누적 거래대금 10억 이상 하한선 필터
+                        # =========================================================================
+                        current_time = datetime.datetime.now().time()
+                        market_open_1min = datetime.time(9, 1, 0)
+                        
+                        # 1. 시간 필터: 09:01:00 이전 매수 진입 차단 (초반 호가 공백/노이즈 회피)
+                        if current_time < market_open_1min:
+                            continue
+                            
+                        # 2. 거래대금 필터: 당일 누적 거래대금 10억 원 미만 종목 차단
+                        total_trade_amt = info.get('acml_vol', 0) * info['price']
+                        if total_trade_amt < BotConfig.VALUE_KING_MIN_VALUE:  # 10억 원
+                            continue
+                        # =========================================================================
 
                         '''# 👇 [여기에 추가] 프로그램 대량 매도 폭탄 회피 필터
                         pg_amt = info.get('program_buy', 0) * info['price']

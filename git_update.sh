@@ -1,3 +1,3 @@
 git add .
-git commit -m "sell 함수 보완, 에러로깅 변경"
+git commit -m "5% 필터 추가, MIN_RATE_LIMIT"
 git push -u origin main

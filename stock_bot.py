@@ -112,6 +112,7 @@ class BotConfig:
     VALUE_KING_MIN_VALUE = 1_000_000_000
     VALUE_KING_MAX_VALUE = 30_000_000_000 # 누적 거래대금 300억 이하 공략
     MAX_RATE_LIMIT = 15.0  # 👈 [추가] 너무 높은 고점(+15% 초과) 추격 매수 금지 상한선
+    MIN_RATE_LIMIT = 5.0  # 5%이상 상승종목 매수
 
     # 🛡️ 2. 청산 (손절/익절) 절대 방어선
     PARTIAL_PROFIT_RATE = 0.025  # +2.5% 도달 시 50% 절반 익절
@@ -778,6 +779,13 @@ class TradingBot:
                         if total_trade_amt < BotConfig.VALUE_KING_MIN_VALUE:  # 10억 원
                             continue
                         # =========================================================================
+
+                        # 3. 등락률 필터: 당일 5% 미만 상승 종목 매수 진입 차단 (모멘텀 부족 회피)
+                        # (주의: info 딕셔너리 내 등락률 정보 키명이 'rate', 'gap_rate', 'flt_rt' 등 
+                        # 실제 수신되는 API 데이터 구조에 맞춰 키 이름을 조정해 주십시오.)
+                        current_rate = info.get('rate', 0) 
+                        if current_rate < BotConfig.MIN_RATE_LIMIT:
+                            continue
 
                         '''# 👇 [여기에 추가] 프로그램 대량 매도 폭탄 회피 필터
                         pg_amt = info.get('program_buy', 0) * info['price']

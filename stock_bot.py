@@ -661,12 +661,15 @@ class TradingBot:
                 
                 self.blacklist[code] = "SOLD" 
                 self.ws_subscribe(code, "2") # 📡 웹소켓 구독 즉시 해제
-                del self.portfolio[code]
+
+                # 👇 [수정] 강제 삭제(del) 대신 안전한 pop 사용 (에러 방지)
+                self.portfolio.pop(code, None)
+                self.pending_sells.pop(code, None) 
+
                 self.save_state()
             else:
                 # 👇 [핵심 추가] API 주문 거절/실패 시 잠금 해제하여 다음 틱에서 재시도할 수 있게 복구
-                if code in self.pending_sells:
-                    del self.pending_sells[code]
+                self.pending_sells.pop(code, None)
                 print(f"⚠️ 매도 주문 실패 [{code}]: {res.get('msg1')} - 다음 루프에서 재시도합니다.")
 
     # ----------------------------------------------------------------------

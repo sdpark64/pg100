@@ -1,3 +1,3 @@
 git add .
-git commit -m "5% 필터 추가, MIN_RATE_LIMIT"
+git commit -m "3% 고가필터 추가"
 git push -u origin main

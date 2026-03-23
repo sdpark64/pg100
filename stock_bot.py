@@ -70,8 +70,8 @@ sys.stderr = StreamToLogger(logger, logging.ERROR)
 # ==============================================================================
 # 🕹️ [모드 설정]
 # ==============================================================================
-# MODE = "REAL"   # 실전투자
-MODE = "MOCK"   # 모의투자
+MODE = "REAL"   # 실전투자
+# MODE = "MOCK"   # 모의투자
 
 if MODE == "REAL":
     config.TELEGRAM_BOT_TOKEN = config.REAL_TELEGRAM_BOT_TOKEN
@@ -95,39 +95,54 @@ class BotConfig:
     DELAY_MOCK = 0.60 
 
     if MODE == "MOCK":
-        TR_ID = { "balance": "VTTC8434R", "buy": "VTTC0802U", "sell": "VTTC0801U" }
+        TR_ID = { "balance": "VTTC8434R", "buy": "VTTC0802U", "sell": "VTTC0801U", "cancel": "VTTC0803U" }
     else: 
-        TR_ID = { "balance": "TTTC8434R", "buy": "TTTC0802U", "sell": "TTTC0801U" }
+        TR_ID = { "balance": "TTTC8434R", "buy": "TTTC0802U", "sell": "TTTC0801U", "cancel": "TTTC0803U" }
 
-    MAX_GLOBAL_SLOTS = 6  
-    INVEST_RATIO = 0.15   
+    MAX_GLOBAL_SLOTS = 6
+    INVEST_RATIO = 0.15
 
     EXCLUDE_KEYWORDS = ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]
+    # ETF 식별용 키워드 (프로그램 수급 필터 예외 처리용)
+    ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI", "레버리지"]
     MIN_STOCK_PRICE = 5000
 
-    # ⚔️ 1. 진입 (매수) 조건: 초기 수급 포착 (09:00 ~ 09:30)
+    # 1. 진입 (매수) 조건: 초기 수급 포착 (09:00 ~ 10:00)
     VALUEKING_START_HOUR = 9     
-    VALUEKING_END_HOUR = 9       
-    VALUEKING_END_MINUTE = 30
+    VALUEKING_END_HOUR = 10       
+    VALUEKING_END_MINUTE = 00
     VALUE_KING_MIN_VALUE = 1_000_000_000
     VALUE_KING_MAX_VALUE = 30_000_000_000 # 누적 거래대금 300억 이하 공략
     MAX_RATE_LIMIT = 15.0  # 👈 [추가] 너무 높은 고점(+15% 초과) 추격 매수 금지 상한선
     MIN_RATE_LIMIT = 5.0  # 5%이상 상승종목 매수
 
-    # 🛡️ 2. 청산 (손절/익절) 절대 방어선
+    # 2. 청산 (손절/익절) 절대 방어선
     PARTIAL_PROFIT_RATE = 0.025  # +2.5% 도달 시 50% 절반 익절
     PARTIAL_SELL_RATIO = 0.5
     TS_TRIGGER_RATE = 0.025      # 트레일링 스탑 발동 기준
     TS_STOP_GAP = 0.015          # 최고점 대비 -1.5% 하락 시 익절/손절
+    HARD_STOP_RATE = -0.03       # 돌발 폭락 투매 대비 기계적 절대 손절 한도 (-3%)
+    DYNAMIC_STOP_RATE = 0.03     # 매수 후 장중 최고가 대비 -3.0% 하락 시 다이내믹 손절 (윗꼬리 방어)
 
-    # ⏳ 타임아웃 컷 (10:30)
-    TIMEOUT_HOUR = 10            
-    TIMEOUT_MINUTE = 30
+    # 3. 프로그램 수급 필터 기준 (애매한 가짜 매수세 구간)
+    PROGRAM_BUY_AMBIGUOUS_MIN = 0           # 하한선 (0원)
+    PROGRAM_BUY_AMBIGUOUS_MAX = 500_000_000 # 상한선 (5억 원)
+
+    # 4. 시가총액 하한선 필터 (단위: 억 원)
+    MIN_MARKET_CAP = 3000   # 3,000억 원 미만 소형 잡주 진입 차단
+
+    # ⏳ 타임아웃 컷 (11:00)
+    TIMEOUT_HOUR = 11            
+    TIMEOUT_MINUTE = 00
     TIMEOUT_PROFIT = 0.003       # 10시 30분 기준 수익률이 0.3%(수수료 수준) 이하면 무조건 컷
 
     MARKET_CLOSE_HOUR = 15
     MARKET_CLOSE_MINUTE = 15
 
+    # 👇 [추가] 모드별 주문 대기 시간 (안전 마진 포함)
+    ORDER_DELAY_REAL = 0.06
+    ORDER_DELAY_MOCK = 0.60
+    
 def is_excluded_stock(name):
     if name.endswith("우"): return True
     return any(keyword in name for keyword in BotConfig.EXCLUDE_KEYWORDS)
@@ -299,6 +314,25 @@ class KisApi:
         try: return requests.post(url, headers=headers, json=body, timeout=5).json()
         except: return {'rt_cd': '9999', 'msg1': 'Error'}
 
+    def cancel_order(self, code, orgn_odno, orgn_orgno, quantity):
+        base_url = BotConfig.URL_REAL if MODE == "REAL" else BotConfig.URL_MOCK
+        acc_no = config.REAL_ACC_NO if MODE == "REAL" else config.MOCK_ACC_NO
+        url = f"{base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
+        
+        headers = self.get_headers(BotConfig.TR_ID["cancel"], "TRADE")
+        body = {
+            "CANO": acc_no[:8], "ACNT_PRDT_CD": acc_no[-2:], "KRX_FWDG_ORD_ORGNO": orgn_orgno,
+            "ORGN_ODNO": orgn_odno, "ORD_DVSN": "01", "RVSE_CNCL_DVSN_CD": "02", # 01:시장가, 02:취소
+            "ORD_QTY": str(quantity), "ORD_UNPR": "0", "QTY_ALL_ORD_YN": "Y"
+        }
+        
+        if MODE == "REAL":
+            hashkey = self.fetch_hashkey(body)
+            if hashkey: headers["hashkey"] = hashkey
+            else: return {'rt_cd': '9999', 'msg1': 'HashKey Failed'}
+        try: return requests.post(url, headers=headers, json=body, timeout=5).json()
+        except: return {'rt_cd': '9999', 'msg1': 'Error'}
+
 # ==============================================================================
 # 3. 봇 메인 로직 (TradingBot - Event Driven WebSockets)
 # ==============================================================================
@@ -422,11 +456,26 @@ class TradingBot:
             self.portfolio[code]['max_profit_rate'] = profit_rate
         max_profit = self.portfolio[code]['max_profit_rate']
 
+        # =========================================================================
+        # 👇 [신규 추가] 매수 이후 장중 최고가 대비 하락률(윗꼬리 길이) 실시간 계산
+        # =========================================================================
+        if current_price > info.get('day_high_price', 0): 
+            self.portfolio[code]['day_high_price'] = current_price
+            
+        day_high = self.portfolio[code].get('day_high_price', current_price)
+        drop_from_peak = (day_high - current_price) / day_high if day_high > 0 else 0
+        # =========================================================================
+
         reason = None
         
         # 🚨 최우선 방어선 (웹소켓 틱 단위 감시)
         if open_price > 0 and current_price < open_price: 
             reason = "📉시가(Open) 지지선 이탈 즉시 손절"
+        # 👇 [신규 추가] BotConfig 변수를 활용한 절대 손절
+        elif profit_rate <= BotConfig.HARD_STOP_RATE:
+            reason = f"💔기계적 절대 손절 컷 ({profit_rate*100:.2f}%)"
+        elif not info.get('has_partial_sold', False) and drop_from_peak >= BotConfig.DYNAMIC_STOP_RATE:
+            reason = f"🛡️다이내믹 손절 (고점 대비 -{drop_from_peak*100:.2f}% 하락)"
         elif max_profit >= BotConfig.TS_TRIGGER_RATE and profit_rate <= (max_profit - BotConfig.TS_STOP_GAP):
             reason = f"🎢트레일링스탑(최고{max_profit*100:.1f}%->현재{profit_rate*100:.1f}%)"
         # 익절 후 흘러내림 방어
@@ -465,7 +514,7 @@ class TradingBot:
                     for my_code in list(self.portfolio.keys()):
                         if my_code not in real_holdings:
                             self.missing_counts[my_code] = self.missing_counts.get(my_code, 0) + 1
-                            if self.missing_counts[my_code] >= 6: 
+                            if self.missing_counts[my_code] >= 18: 
                                 self.ws_subscribe(my_code, "2") 
                                 del self.portfolio[my_code]
                                 self.blacklist[my_code] = "SOLD"
@@ -537,8 +586,10 @@ class TradingBot:
                         pg_amt_100m = (info.get('program_buy', 0) * info.get('price', 0)) // 100000000
                         market_cap_100m = info.get('market_cap', 0)  # 👈 [추가] 상세 정보에서 시가총액 가져오기
 
-                        # 👇 [기록 수정] 마지막 열에 market_cap_100m을 추가하여 기록
-                    writer.writerow([now_str, code, name, price, vol, trade_amt_100m, item.get('rate', 0.0), pg_amt_100m, market_cap_100m])
+                        # 👇 [수정] info 딕셔너리에서 가져온 최신 rate 사용
+                        writer.writerow([now_str, code, name, price, vol, trade_amt_100m, info.get('rate', 0.0), pg_amt_100m, market_cap_100m])
+                    else:
+                        writer.writerow([now_str, code, name, price, vol, trade_amt_100m, item.get('rate', 0.0), 0, 0])
 
             print(f"📝 [데이터 수집] {now_str} 기준 검색기 포착 {len(value_list)}종목 전수 로깅 완료.")
         except: pass
@@ -559,27 +610,34 @@ class TradingBot:
         if qty > 0:
             res = self.api.send_order(code, qty, price=0, is_buy=True) # 시장가(0) 주문
             if res['rt_cd'] == '0':
-                
+
+                # 👇 [핵심 추가] API 응답에서 원주문번호와 주문조직번호 확보
+                output = res.get('output', {})
+                odno = output.get('ODNO', '')
+                orgno = output.get('KRX_FWDG_ORD_ORGNO', '')
+
                 # 🛡️ [핵심 수정] 매수 직후 0.5초 대기 후 잔고를 즉시 조회하여 '진짜 체결 평단가'를 가져옴
-                time.sleep(0.5) 
-                real_holdings = self.api.fetch_my_stock_list()
+                # time.sleep(0.5) 
+                # real_holdings = self.api.fetch_my_stock_list()
                 
                 # 실제 체결가가 확인되면 적용, 혹시 조회가 실패하면 임시가 적용
                 actual_buy_price = expected_price
-                if real_holdings and code in real_holdings:
-                    actual_buy_price = real_holdings[code]['price']
+                # if real_holdings and code in real_holdings:
+                    # actual_buy_price = real_holdings[code]['price']
 
                 pg_amt_now = info.get('program_buy', 0) * expected_price
-                
+
                 self.portfolio[code] = {
                     'name': info['name'], 'qty': qty, 
-                    'buy_price': actual_buy_price,  # 👈 진짜 체결가로 완벽하게 기록
+                    'buy_price': actual_buy_price,
+                    'odno': odno,
+                    'orgno': orgno,
                     'strategy': 'VALUEKING', 'max_profit_rate': 0.0, 'has_partial_sold': False, 
                     'buy_time': datetime.datetime.now(), 'open_price': info['open'],
                     'current_price': actual_buy_price, 
-                    
                     'stats_entry_pg': pg_amt_now, 'stats_max_pg': pg_amt_now,        
-                    'stats_max_price': actual_buy_price, 'stats_min_price': actual_buy_price
+                    'stats_max_price': actual_buy_price, 'stats_min_price': actual_buy_price,
+                    'day_high_price': max(actual_buy_price, info.get('high', actual_buy_price))
                 }
                 
                 self.ws_subscribe(code, "1")
@@ -634,7 +692,31 @@ class TradingBot:
             
     def sell_stock(self, code, reason):
         if code in self.portfolio:
-            qty = self.portfolio[code]['qty']
+            p_data = self.portfolio[code]
+            qty = p_data['qty']
+            name = p_data['name']
+            buy_price = p_data['buy_price']
+            
+            # 👇 [핵심 추가] 1. 실제 잔고 확인 (미체결 여부 판별)
+            real_holdings = self.api.fetch_my_stock_list()
+            
+            # 👇 [핵심 추가] 2. 잔고에 없다면 미체결 상태이므로 취소 주문 실행
+            if real_holdings is not None and code not in real_holdings:
+                res = self.api.cancel_order(code, p_data.get('odno', ''), p_data.get('orgno', ''), qty)
+                if res['rt_cd'] == '0':
+                    msg = f"🚫 [미체결 매수 취소] {name}\n사유: {reason}"
+                    telegram_notifier.send_telegram_message(msg)
+                    self.blacklist[code] = "CANCELLED"
+                    self.ws_subscribe(code, "2")
+                    self.portfolio.pop(code, None)
+                    self.pending_sells.pop(code, None)
+                    self.save_state()
+                else:
+                    self.pending_sells.pop(code, None)
+                    print(f"⚠️ 취소 주문 실패 [{code}]: {res.get('msg1')}")
+                return
+
+            # 👇 3. 잔고에 있다면 기존처럼 정상 매도 실행
             res = self.api.send_order(code, qty, is_buy=False)
             
             if res['rt_cd'] == '0':
@@ -689,13 +771,30 @@ class TradingBot:
 
                         cmd = update['message']['text'].strip().split()[0].lower()
                         if cmd in ['/info', 'info']:
-                            msg = f"📊 [상태]\n잔고: {self.api.fetch_balance():,}원\n\n[보유 종목]"
+                            real_holdings = self.api.fetch_my_stock_list() or {}
+                            balance = self.api.fetch_balance()
+
+                            msg = f"📊 [상태]\n잔고: {balance:,}원\n"
+                            
+                            msg += "\n[🤖 봇 내부 장부 (포트폴리오)]"
                             if not self.portfolio: msg += "\n없음"
                             for c, v in self.portfolio.items():
                                 cur_price = v.get('current_price', v['buy_price'])
-                                if cur_price > 0 and v['buy_price'] > 0:
-                                    cur_rate = (cur_price - v['buy_price']) / v['buy_price'] * 100
-                                    msg += f"\n- {v['name']}: {v['qty']}주 (현재 {cur_rate:+.2f}%)"
+                                cur_rate = (cur_price - v['buy_price']) / v['buy_price'] * 100 if v['buy_price'] > 0 else 0
+                                # 미체결(VI) 상태인지 실제 입고되었는지 표시
+                                status = "⏳ 미체결대기" if c not in real_holdings else "✅ 정상체결"
+                                msg += f"\n- {v['name']}: {v['qty']}주 (현재 {cur_rate:+.2f}%) [{status}]"
+                            
+                            msg += "\n\n[🏦 증권사 실제 잔고]"
+                            if not real_holdings: msg += "\n없음"
+                            for c, v in real_holdings.items():
+                                msg += f"\n- {v['name']}: {v['qty']}주 (평단 {int(v['price']):,}원)"
+
+                            # 고아 종목 (실제 계좌엔 있는데 봇 장부엔 없는 경우) 탐지
+                            orphans = [v['name'] for c, v in real_holdings.items() if c not in self.portfolio]
+                            if orphans:
+                                msg += f"\n\n⚠️ [경고] 봇 미관리 종목(고아):\n{', '.join(orphans)}"
+
                             telegram_notifier.send_telegram_message(msg)
                         elif cmd in ['/stop', 'stop']: self.is_buy_active = False; telegram_notifier.send_telegram_message("⛔ 매수 정지")
                         elif cmd in ['/start', 'start']: self.is_buy_active = True; telegram_notifier.send_telegram_message("🟢 매수 재개")
@@ -741,8 +840,9 @@ class TradingBot:
                 # 밸류 킹 매수 진입 (09:00 ~ 09:30 데이터 검증 최적화)
                 # ==================================================================
                 current_slots = sum(1 for _ in self.portfolio)
-                is_valid_time = (now.hour == BotConfig.VALUEKING_START_HOUR and now.minute <= BotConfig.VALUEKING_END_MINUTE)
-                
+                # is_valid_time = (now.hour == BotConfig.VALUEKING_START_HOUR and now.minute <= BotConfig.VALUEKING_END_MINUTE)
+                is_valid_time = (now.hour == 9) or (now.hour == 10 and now.minute == 0) 
+
                 if self.is_buy_active and current_slots < BotConfig.MAX_GLOBAL_SLOTS and is_valid_time:
                     for item in value_list:
                         code = item['code']
@@ -765,12 +865,12 @@ class TradingBot:
                         if info['rate'] > BotConfig.MAX_RATE_LIMIT: continue
 
                         # =========================================================================
-                        # 👇 [신규 추가] 09:01 이후 & 누적 거래대금 10억 이상 하한선 필터
+                        # 👇 [신규 추가] 09:02 이후 & 누적 거래대금 10억 이상 하한선 필터
                         # =========================================================================
                         current_time = datetime.datetime.now().time()
-                        market_open_1min = datetime.time(9, 1, 0)
+                        market_open_1min = datetime.time(9, 2, 0)
                         
-                        # 1. 시간 필터: 09:01:00 이전 매수 진입 차단 (초반 호가 공백/노이즈 회피)
+                        # 1. 시간 필터: 09:02:00 이전 매수 진입 차단 (초반 호가 공백/노이즈 회피)
                         if current_time < market_open_1min:
                             continue
                             
@@ -787,15 +887,56 @@ class TradingBot:
                         if current_rate < BotConfig.MIN_RATE_LIMIT:
                             continue
 
-                        '''# 👇 [여기에 추가] 프로그램 대량 매도 폭탄 회피 필터
+                        # =========================================================================
+                        # 👇 [신규 추가] 윗꼬리(고점 대비 하락 및 최고점 제한) 회피 로직
+                        # =========================================================================
+                        high_price = info.get('high', 0)
+                        current_price = info['price']
+                        
+                        if high_price > 0:
+                            # 1단계: 당일 고점 대비 현재가가 몇 %나 하락했는지 계산 (윗꼬리 길이 측정)
+                            drop_from_high = (high_price - current_price) / high_price * 100
+                            
+                            # 고점 대비 3% 이상 하락한 종목은 차익실현 매물이 쏟아진 '윗꼬리'로 간주하여 매수 포기
+                            if drop_from_high >= 3.0: 
+                                continue
+                            
+                            # 2단계: 질문하신 예시처럼 "오늘 한 번이라도 20% 이상 치솟았던 종목" 아예 배제하기
+                            # 전일 종가 역산 후 당일 최고 상승률 계산
+                            prev_close = current_price / (1 + (current_rate / 100))
+                            highest_rate_today = (high_price - prev_close) / prev_close * 100
+                            
+                            # 당일 한 번이라도 15.0%(설정된 MAX_RATE)를 초과했던 이력이 있다면 매수 포기
+                            # if highest_rate_today > BotConfig.MAX_RATE_LIMIT:
+                                # continue
+                        # =========================================================================
+
+                        # --------------------------------------------------
+                        # (추가) 현재 종목이 ETF인지 판별
+                        # --------------------------------------------------
+                        stock_name = info.get('name', '')
+                        is_etf = any(keyword in stock_name for keyword in BotConfig.ETF_KEYWORDS)
+
+                        # 4. 프로그램 순매수 필터 (ETF는 무시하고 일반 주식에만 적용)
                         pg_amt = info.get('program_buy', 0) * info['price']
-                        total_trade_amt = info.get('acml_vol', 0) * info['price']
+                        
+                        if not is_etf:  # 👈 일반 종목일 경우에만 수급을 체크합니다.
+                            # 애매한 꼬시기 수급 차단 (순매수 0원 이상 ~ 5억 원 미만 버림)
+                            if BotConfig.PROGRAM_BUY_AMBIGUOUS_MIN <= pg_amt < BotConfig.PROGRAM_BUY_AMBIGUOUS_MAX:
+                                continue
+
+                        # total_trade_amt = info.get('acml_vol', 0) * info['price']
                         # 프로그램 순매도 금액이 당일 누적 거래대금의 5%를 초과할 정도로 거세면 매수 포기
-                        if pg_amt < 0 and abs(pg_amt) > (total_trade_amt * 0.05): 
-                            continue'''
+                        # if pg_amt < 0 and abs(pg_amt) > (total_trade_amt * 0.05):
+                            # continue
+
+                        # 5. 시가총액 하한선 필터
+                        if info.get('market_cap', 0) < BotConfig.MIN_MARKET_CAP:
+                            continue
 
                         # 진입 실행
                         self.execute_buy(info)
+
                         if sum(1 for _ in self.portfolio) >= BotConfig.MAX_GLOBAL_SLOTS: break
 
                 time.sleep(1)

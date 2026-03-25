@@ -1,3 +1,3 @@
 git add .
-git commit -m "타임아웃시 0원인식 오류 수정"
+git commit -m "필터 최적화, 오후매매 추가 등"
 git push -u origin main

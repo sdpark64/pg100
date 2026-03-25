@@ -105,16 +105,23 @@ class BotConfig:
     EXCLUDE_KEYWORDS = ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]
     # ETF 식별용 키워드 (프로그램 수급 필터 예외 처리용)
     ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI", "레버리지"]
-    MIN_STOCK_PRICE = 5000
+    MIN_STOCK_PRICE = 50_000
+    MAX_STOCK_PRICE = 200_000
 
     # 1. 진입 (매수) 조건: 초기 수급 포착 (09:00 ~ 10:00)
     VALUEKING_START_HOUR = 9     
     VALUEKING_END_HOUR = 10       
     VALUEKING_END_MINUTE = 00
-    VALUE_KING_MIN_VALUE = 1_000_000_000
+    VALUE_KING_MIN_VALUE = 5_000_000_000
     VALUE_KING_MAX_VALUE = 30_000_000_000 # 누적 거래대금 300억 이하 공략
-    MAX_RATE_LIMIT = 15.0  # 👈 [추가] 너무 높은 고점(+15% 초과) 추격 매수 금지 상한선
+    MAX_RATE_LIMIT = 11.0  # 👈 [추가] 너무 높은 고점(+15% 초과) 추격 매수 금지 상한선
     MIN_RATE_LIMIT = 5.0  # 5%이상 상승종목 매수
+
+    # [추가] ⚡ 수급 가속도 (Velocity) 필터 기준 (단위: 억 원/분)
+    TRADE_SPEED_MIN = 10  # 분당 10억 이상 유입
+    TRADE_SPEED_MAX = 50  # 분당 50억 초과 시 피날레 고점 판정(매수 금지)
+    PG_SPEED_MIN = 0      # 분당 프로그램 순매수 0억 이상 (매도세 금지)
+    PG_SPEED_MAX = 10     # 분당 10억 초과 시 비정상 스파이크 판정(매수 금지)
 
     # 2. 청산 (손절/익절) 절대 방어선
     PARTIAL_PROFIT_RATE = 0.025  # +2.5% 도달 시 50% 절반 익절
@@ -129,7 +136,7 @@ class BotConfig:
     PROGRAM_BUY_AMBIGUOUS_MAX = 500_000_000 # 상한선 (5억 원)
 
     # 4. 시가총액 하한선 필터 (단위: 억 원)
-    MIN_MARKET_CAP = 3000   # 3,000억 원 미만 소형 잡주 진입 차단
+    MIN_MARKET_CAP = 2000   # 3,000억 원 미만 소형 잡주 진입 차단
 
     # ⏳ 타임아웃 컷 (11:00)
     TIMEOUT_HOUR = 11            
@@ -359,6 +366,9 @@ class TradingBot:
         self.missing_counts = {}
         self.pending_sells = {}
 
+        # 👇 [신규 추가] 수급 속도(가속도) 계산을 위한 이전 데이터 저장소
+        self.prev_stock_data = {}  # {code: {'time': datetime, 'trade_amt': int, 'pg_amt': int}}
+
     def load_state(self):
         if os.path.exists('bot_state.json'):
             try:
@@ -467,13 +477,37 @@ class TradingBot:
         # =========================================================================
 
         reason = None
-        
-        # 🚨 최우선 방어선 (웹소켓 틱 단위 감시)
+
+        # 🚨 [수정] 최우선 방어선 (하이브리드 시간 버퍼 적용)
         if open_price > 0 and current_price < open_price: 
             reason = "📉시가(Open) 지지선 이탈 즉시 손절"
-        # 👇 [신규 추가] BotConfig 변수를 활용한 절대 손절
         elif profit_rate <= BotConfig.HARD_STOP_RATE:
-            reason = f"💔기계적 절대 손절 컷 ({profit_rate*100:.2f}%)"
+            # [신규 핵심 로직] 기계적 절대 손절선(-3%) 도달 시 분기 처리
+            if code not in self.current_value_codes:
+                # 1) 수급 완전 이탈(조건식 편출) -> 즉시 손절
+                reason = f"💔기계적 컷+수급이탈 ({profit_rate*100:.2f}%)"
+            else:
+                # 2) 수급 유지 중 -> 버퍼 가동 (최대 3분 대기)
+                if 'stop_buffer_time' not in info:
+                    self.portfolio[code]['stop_buffer_time'] = datetime.datetime.now()
+                else:
+                    elapsed = (datetime.datetime.now() - info['stop_buffer_time']).total_seconds()
+                    if elapsed > 180: # 3분(180초) 경과 후에도 손절선 아래면 매도
+                        reason = f"⏳버퍼초과 손절 ({profit_rate*100:.2f}%)"
+                    else:
+                        return # 아직 버퍼 시간 안 끝났으면 매도 보류(Return)
+
+        # 만약 손절선(-3%) 위로 다시 반등했다면 버퍼 타이머 초기화
+        if profit_rate > BotConfig.HARD_STOP_RATE and 'stop_buffer_time' in info:
+            del self.portfolio[code]['stop_buffer_time']
+
+        # 🚨 최우선 방어선 (웹소켓 틱 단위 감시)
+        # if open_price > 0 and current_price < open_price: 
+            # reason = "📉시가(Open) 지지선 이탈 즉시 손절"
+        # 👇 [신규 추가] BotConfig 변수를 활용한 절대 손절
+        # elif profit_rate <= BotConfig.HARD_STOP_RATE:
+            # reason = f"💔기계적 절대 손절 컷 ({profit_rate*100:.2f}%)"
+
         elif not info.get('has_partial_sold', False) and drop_from_peak >= BotConfig.DYNAMIC_STOP_RATE:
             reason = f"🛡️다이내믹 손절 (고점 대비 -{drop_from_peak*100:.2f}% 하락)"
         elif max_profit >= BotConfig.TS_TRIGGER_RATE and profit_rate <= (max_profit - BotConfig.TS_STOP_GAP):
@@ -847,7 +881,18 @@ class TradingBot:
                 # ==================================================================
                 current_slots = sum(1 for _ in self.portfolio)
                 # is_valid_time = (now.hour == BotConfig.VALUEKING_START_HOUR and now.minute <= BotConfig.VALUEKING_END_MINUTE)
-                is_valid_time = (now.hour == 9) or (now.hour == 10 and now.minute == 0) 
+                # is_valid_time = (now.hour == 9) or (now.hour == 10 and now.minute == 0) 
+
+                is_valid_time = False
+                current_time = now.time()
+                
+                # 1. 오전장: 09:06:00 ~ 10:00:00 (초반 노이즈 회피)
+                if datetime.time(9, 6, 0) <= current_time <= datetime.time(10, 0, 0):
+                    is_valid_time = True
+                # 2. 휴식장: 10:00:00 ~ 12:00:00 (신규 진입 전면 차단, is_valid_time = False 유지)
+                # 3. 오후장: 12:00:00 ~ 15:00:00 (추세 신뢰도 높은 시간대 적극 진입)
+                elif datetime.time(12, 0, 0) <= current_time <= datetime.time(15, 0, 0):
+                    is_valid_time = True
 
                 if self.is_buy_active and current_slots < BotConfig.MAX_GLOBAL_SLOTS and is_valid_time:
                     for item in value_list:

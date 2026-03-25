@@ -543,7 +543,7 @@ class TradingBot:
                     if info['buy_price'] > 0:
                         profit_rate = (current_price - info['buy_price']) / info['buy_price']
                         if profit_rate <= BotConfig.TIMEOUT_PROFIT:
-                            codes_to_sell.append((my_code, f"⏳타임아웃(10:30 도달/수익미달 컷)"))
+                            codes_to_sell.append((my_code, f"⏳타임아웃(수익미달 컷)"))
                 
                 # 🚨 2. 조건검색 편출 즉시 매도 (수급 이탈)
                 if self.current_value_codes and (my_code not in self.current_value_codes):
@@ -725,10 +725,16 @@ class TradingBot:
                 buy_price = p_data['buy_price']
                 
                 temp_info = self.api.fetch_price_detail(code)
-                cur_price = temp_info['price'] if temp_info else 0
-                exit_pg = (temp_info['program_buy'] * temp_info['price']) if temp_info else 0
+
+                # API 동시 호출 제한(TPS 초과)으로 조회가 실패할 경우 메모리의 최신 가격 사용
+                fallback_price = p_data.get('current_price', buy_price)
+                cur_price = temp_info['price'] if temp_info and temp_info.get('price', 0) > 0 else fallback_price
+                exit_pg = (temp_info['program_buy'] * cur_price) if temp_info else 0
+
+                # cur_price = temp_info['price'] if temp_info else 0
+                # exit_pg = (temp_info['program_buy'] * temp_info['price']) if temp_info else 0
                 profit_rate = ((cur_price - buy_price) / buy_price * 100) if buy_price > 0 else 0
-                
+
                 msg = (f"👋 [{MODE} 절대 방어선 청산] {name}\n사유: {reason}\n매도가: {cur_price:,}원 ({profit_rate:+.2f}%)")
                 telegram_notifier.send_telegram_message(msg)
                 

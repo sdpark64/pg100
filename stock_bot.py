@@ -136,7 +136,8 @@ class BotConfig:
     PROGRAM_BUY_AMBIGUOUS_MAX = 500_000_000 # 상한선 (5억 원)
 
     # 4. 시가총액 하한선 필터 (단위: 억 원)
-    MIN_MARKET_CAP = 2000   # 3,000억 원 미만 소형 잡주 진입 차단
+    MIN_MARKET_CAP = 2000   # 2,000억 원 미만 소형 잡주 진입 차단
+    MAX_MARKET_CAP = 100000   # 10조 원 초과 초대형주 진입 차단 (상한선) 추가!
 
     # ⏳ 타임아웃 컷 (11:00)
     TIMEOUT_HOUR = 11            
@@ -595,7 +596,14 @@ class TradingBot:
     # ----------------------------------------------------------------------
     def log_value_list_volumes(self, value_list):
         if not value_list: return
-        filename = f"value_volume_log_{datetime.datetime.now().strftime('%Y%m%d')}.csv"
+
+        # 👇 [추가] logs 폴더 경로 지정 및 폴더가 없으면 자동 생성
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        
+        filename = os.path.join(log_dir, f"value_volume_log_{datetime.datetime.now().strftime('%Y%m%d')}.csv")
+
         file_exists = os.path.isfile(filename)
         now_str = datetime.datetime.now().strftime("%H:%M:%S")
         try:
@@ -625,7 +633,7 @@ class TradingBot:
                     else:
                         writer.writerow([now_str, code, name, price, vol, trade_amt_100m, item.get('rate', 0.0), 0, 0])
 
-            print(f"📝 [데이터 수집] {now_str} 기준 검색기 포착 {len(value_list)}종목 전수 로깅 완료.")
+            print(f"📝 [데이터 수집] {now_str} 기준 검색기 포착 {len(value_list)}종목 전수 로깅 완료. (경로: {filename})")
         except: pass
 
     # ----------------------------------------------------------------------
@@ -883,111 +891,83 @@ class TradingBot:
                 # is_valid_time = (now.hour == BotConfig.VALUEKING_START_HOUR and now.minute <= BotConfig.VALUEKING_END_MINUTE)
                 # is_valid_time = (now.hour == 9) or (now.hour == 10 and now.minute == 0) 
 
+                # 1. 투-트랙 시간대 세팅
                 is_valid_time = False
                 current_time = now.time()
                 
-                # 1. 오전장: 09:06:00 ~ 10:00:00 (초반 노이즈 회피)
                 if datetime.time(9, 6, 0) <= current_time <= datetime.time(10, 0, 0):
                     is_valid_time = True
-                # 2. 휴식장: 10:00:00 ~ 12:00:00 (신규 진입 전면 차단, is_valid_time = False 유지)
-                # 3. 오후장: 12:00:00 ~ 15:00:00 (추세 신뢰도 높은 시간대 적극 진입)
+                    current_min_trade_amt = 5_000_000_000
+                    current_max_trade_amt = 20_000_000_000
                 elif datetime.time(12, 0, 0) <= current_time <= datetime.time(15, 0, 0):
                     is_valid_time = True
+                    current_min_trade_amt = 100_000_000_000
+                    current_max_trade_amt = float('inf')
 
-                if self.is_buy_active and current_slots < BotConfig.MAX_GLOBAL_SLOTS and is_valid_time:
-                    for item in value_list:
-                        code = item['code']
-                        name = item['name']
+                # 2. 백그라운드 데이터 수집 및 매수 판별 통합 루프
+                for item in value_list:
+                    code = item['code']
+                    name = item['name']
+
+                    if code in self.portfolio or code in self.blacklist: continue
+                    if item['price'] < BotConfig.MIN_STOCK_PRICE or item['price'] > BotConfig.MAX_STOCK_PRICE: continue
+                    if is_excluded_stock(name): continue
+
+                    info = self.api.fetch_price_detail(code, name)
+                    if not info or info['open'] == 0: continue
+
+                    # [핵심] is_valid_time과 무관하게 데이터부터 항상 최신화하여 속도 계산
+                    current_trade_amt = info.get('acml_vol', 0) * info['price']
+                    current_pg_amt = info.get('program_buy', 0) * info['price']
+                    passed_speed_filter = False
+
+                    if code in self.prev_stock_data:
+                        prev_data = self.prev_stock_data[code]
+                        time_diff_sec = (now - prev_data['time']).total_seconds()
                         
-                        # 1. 중복 진입 금지 및 잡주 필터
-                        if code in self.portfolio or code in self.blacklist: continue
-                        if item['price'] < BotConfig.MIN_STOCK_PRICE or is_excluded_stock(name): continue
-
-                        # 2. 수급 필터 (누적 거래대금 300억 이하 막 진입하는 종목 공략)
-                        est_trade_amt = item['price'] * item['vol']
-                        if est_trade_amt > BotConfig.VALUE_KING_MAX_VALUE: continue
-                        
-                        # 3. 상세 조회
-                        info = self.api.fetch_price_detail(code, name)
-                        if not info or info['open'] == 0: continue
-
-                        # 👇 [반드시 추가해야 할 2줄] 윗꼬리 추격 매수 및 음봉 회피
-                        if info['price'] < info['open']: continue                # 양봉(시가 위) 필수 조건
-                        if info['rate'] > BotConfig.MAX_RATE_LIMIT: continue
-
-                        # =========================================================================
-                        # 👇 [신규 추가] 09:02 이후 & 누적 거래대금 10억 이상 하한선 필터
-                        # =========================================================================
-                        current_time = datetime.datetime.now().time()
-                        market_open_1min = datetime.time(9, 2, 0)
-                        
-                        # 1. 시간 필터: 09:02:00 이전 매수 진입 차단 (초반 호가 공백/노이즈 회피)
-                        if current_time < market_open_1min:
-                            continue
+                        if time_diff_sec > 3: 
+                            trade_diff_100m = (current_trade_amt - prev_data['trade_amt']) / 100_000_000
+                            pg_diff_100m = (current_pg_amt - prev_data['pg_amt']) / 100_000_000
+                            trade_speed_per_min = (trade_diff_100m / time_diff_sec) * 60
+                            pg_speed_per_min = (pg_diff_100m / time_diff_sec) * 60
                             
-                        # 2. 거래대금 필터: 당일 누적 거래대금 10억 원 미만 종목 차단
-                        total_trade_amt = info.get('acml_vol', 0) * info['price']
-                        if total_trade_amt < BotConfig.VALUE_KING_MIN_VALUE:  # 10억 원
-                            continue
-                        # =========================================================================
+                            if (BotConfig.TRADE_SPEED_MIN <= trade_speed_per_min <= BotConfig.TRADE_SPEED_MAX) and \
+                               (BotConfig.PG_SPEED_MIN <= pg_speed_per_min <= BotConfig.PG_SPEED_MAX):
+                                passed_speed_filter = True
+                    else:
+                        # 첫 포착 -> 데이터만 저장
+                        self.prev_stock_data[code] = {'time': now, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
+                        continue 
 
-                        # 3. 등락률 필터: 당일 5% 미만 상승 종목 매수 진입 차단 (모멘텀 부족 회피)
-                        # (주의: info 딕셔너리 내 등락률 정보 키명이 'rate', 'gap_rate', 'flt_rt' 등 
-                        # 실제 수신되는 API 데이터 구조에 맞춰 키 이름을 조정해 주십시오.)
-                        current_rate = info.get('rate', 0) 
-                        if current_rate < BotConfig.MIN_RATE_LIMIT:
-                            continue
+                    # 갱신
+                    self.prev_stock_data[code] = {'time': now, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
 
-                        # =========================================================================
-                        # 👇 [신규 추가] 윗꼬리(고점 대비 하락 및 최고점 제한) 회피 로직
-                        # =========================================================================
+                    # =============== 🚧 실제 진입 판별 (is_valid_time일 때만) ===============
+                    if self.is_buy_active and current_slots < BotConfig.MAX_GLOBAL_SLOTS and is_valid_time:
+                        
+                        # 누적 거래대금 시간대별 동적 필터
+                        if not (current_min_trade_amt <= current_trade_amt <= current_max_trade_amt): continue
+                        
+                        # 속도 필터 통과 여부
+                        if not passed_speed_filter: continue
+                        
+                        # 기본 양봉, 상승률 필터
+                        if info['price'] < info['open']: continue
+                        if info['rate'] < BotConfig.MIN_RATE_LIMIT or info['rate'] > BotConfig.MAX_RATE_LIMIT: continue
+                        
+                        # 윗꼬리(고점 대비 3% 이상 하락) 방어
                         high_price = info.get('high', 0)
-                        current_price = info['price']
-                        
-                        if high_price > 0:
-                            # 1단계: 당일 고점 대비 현재가가 몇 %나 하락했는지 계산 (윗꼬리 길이 측정)
-                            drop_from_high = (high_price - current_price) / high_price * 100
-                            
-                            # 고점 대비 3% 이상 하락한 종목은 차익실현 매물이 쏟아진 '윗꼬리'로 간주하여 매수 포기
-                            if drop_from_high >= 3.0: 
-                                continue
-                            
-                            # 2단계: 질문하신 예시처럼 "오늘 한 번이라도 20% 이상 치솟았던 종목" 아예 배제하기
-                            # 전일 종가 역산 후 당일 최고 상승률 계산
-                            prev_close = current_price / (1 + (current_rate / 100))
-                            highest_rate_today = (high_price - prev_close) / prev_close * 100
-                            
-                            # 당일 한 번이라도 15.0%(설정된 MAX_RATE)를 초과했던 이력이 있다면 매수 포기
-                            # if highest_rate_today > BotConfig.MAX_RATE_LIMIT:
-                                # continue
-                        # =========================================================================
+                        if high_price > 0 and ((high_price - info['price']) / high_price * 100) >= 3.0: continue
 
-                        # --------------------------------------------------
-                        # (추가) 현재 종목이 ETF인지 판별
-                        # --------------------------------------------------
-                        stock_name = info.get('name', '')
-                        is_etf = any(keyword in stock_name for keyword in BotConfig.ETF_KEYWORDS)
+                        # 프로그램 꼬시기 차단
+                        is_etf = any(keyword in name for keyword in BotConfig.ETF_KEYWORDS)
+                        if not is_etf and BotConfig.PROGRAM_BUY_AMBIGUOUS_MIN <= current_pg_amt < BotConfig.PROGRAM_BUY_AMBIGUOUS_MAX: continue
 
-                        # 4. 프로그램 순매수 필터 (ETF는 무시하고 일반 주식에만 적용)
-                        pg_amt = info.get('program_buy', 0) * info['price']
-                        
-                        if not is_etf:  # 👈 일반 종목일 경우에만 수급을 체크합니다.
-                            # 애매한 꼬시기 수급 차단 (순매수 0원 이상 ~ 5억 원 미만 버림)
-                            if BotConfig.PROGRAM_BUY_AMBIGUOUS_MIN <= pg_amt < BotConfig.PROGRAM_BUY_AMBIGUOUS_MAX:
-                                continue
+                        # 시가총액
+                        market_cap = info.get('market_cap', 0)
+                        if market_cap < BotConfig.MIN_MARKET_CAP or market_cap > BotConfig.MAX_MARKET_CAP: continue
 
-                        # total_trade_amt = info.get('acml_vol', 0) * info['price']
-                        # 프로그램 순매도 금액이 당일 누적 거래대금의 5%를 초과할 정도로 거세면 매수 포기
-                        # if pg_amt < 0 and abs(pg_amt) > (total_trade_amt * 0.05):
-                            # continue
-
-                        # 5. 시가총액 하한선 필터
-                        if info.get('market_cap', 0) < BotConfig.MIN_MARKET_CAP:
-                            continue
-
-                        # 진입 실행
                         self.execute_buy(info)
-
                         if sum(1 for _ in self.portfolio) >= BotConfig.MAX_GLOBAL_SLOTS: break
 
                 time.sleep(1)

@@ -916,6 +916,13 @@ class TradingBot:
                     info = self.api.fetch_price_detail(code, name)
                     if not info or info['open'] == 0: continue
 
+                    # ==========================================================
+                    # 👇 [추가] API 조회가 끝난 '직후'의 정확한 현재 시간을 새로 측정
+                    current_fetch_time = datetime.datetime.now()
+                    # ==========================================================
+
+                    is_etf = any(keyword in name for keyword in BotConfig.ETF_KEYWORDS)
+
                     # [핵심] is_valid_time과 무관하게 데이터부터 항상 최신화하여 속도 계산
                     current_trade_amt = info.get('acml_vol', 0) * info['price']
                     current_pg_amt = info.get('program_buy', 0) * info['price']
@@ -923,24 +930,29 @@ class TradingBot:
 
                     if code in self.prev_stock_data:
                         prev_data = self.prev_stock_data[code]
-                        time_diff_sec = (now - prev_data['time']).total_seconds()
+                        time_diff_sec = (current_fetch_time - prev_data['time']).total_seconds()
                         
-                        if time_diff_sec > 3: 
+                        if time_diff_sec >= 3.0: 
                             trade_diff_100m = (current_trade_amt - prev_data['trade_amt']) / 100_000_000
                             pg_diff_100m = (current_pg_amt - prev_data['pg_amt']) / 100_000_000
                             trade_speed_per_min = (trade_diff_100m / time_diff_sec) * 60
                             pg_speed_per_min = (pg_diff_100m / time_diff_sec) * 60
-                            
-                            if (BotConfig.TRADE_SPEED_MIN <= trade_speed_per_min <= BotConfig.TRADE_SPEED_MAX) and \
-                               (BotConfig.PG_SPEED_MIN <= pg_speed_per_min <= BotConfig.PG_SPEED_MAX):
-                                passed_speed_filter = True
+
+                            # 거래대금 속도 체크 (공통 적용: 분당 10~50억)
+                            if BotConfig.TRADE_SPEED_MIN <= trade_speed_per_min <= BotConfig.TRADE_SPEED_MAX:
+                                
+                                # 프로그램 속도 체크 (ETF는 조건 프리패스, 일반 주식은 분당 0~10억 체크)
+                                if is_etf or (BotConfig.PG_SPEED_MIN <= pg_speed_per_min <= BotConfig.PG_SPEED_MAX):
+                                    passed_speed_filter = True
+
                     else:
                         # 첫 포착 -> 데이터만 저장
-                        self.prev_stock_data[code] = {'time': now, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
+                        # 👇 [수정] 'now' 대신 'current_fetch_time' 저장
+                        self.prev_stock_data[code] = {'time': current_fetch_time, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
                         continue 
 
                     # 갱신
-                    self.prev_stock_data[code] = {'time': now, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
+                    self.prev_stock_data[code] = {'time': current_fetch_time, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
 
                     # =============== 🚧 실제 진입 판별 (is_valid_time일 때만) ===============
                     if self.is_buy_active and current_slots < BotConfig.MAX_GLOBAL_SLOTS and is_valid_time:

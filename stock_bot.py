@@ -565,12 +565,40 @@ class TradingBot:
             for my_code in list(self.portfolio.keys()):
                 info = self.portfolio[my_code]
                 
-                # ⏳ 1. 타임아웃 컷 (10:30 돌파 시 수익 미달) - 절대 방어선
+                '''# ⏳ 1. 타임아웃 컷 (10:30 돌파 시 수익 미달) - 절대 방어선
                 is_timeout = False
                 if now_time.hour > BotConfig.TIMEOUT_HOUR:
                     is_timeout = True
                 elif now_time.hour == BotConfig.TIMEOUT_HOUR and now_time.minute >= BotConfig.TIMEOUT_MINUTE:
                     is_timeout = True
+                    
+                if is_timeout:
+                    # 웹소켓이 최신화한 메모리 상의 가격을 활용하여 API 호출 낭비 없음
+                    current_price = info.get('current_price', info['buy_price'])
+                    if info['buy_price'] > 0:
+                        profit_rate = (current_price - info['buy_price']) / info['buy_price']
+                        if profit_rate <= BotConfig.TIMEOUT_PROFIT:
+                            codes_to_sell.append((my_code, f"⏳타임아웃(수익미달 컷)"))'''
+
+                # =====================================================================
+                # ⏳ 1. 타임아웃 컷 (매수 시간 기준 오전/오후 이원화)
+                # =====================================================================
+                is_timeout = False
+                buy_time = info.get('buy_time', now_time) # 종목을 매수한 시간 확인
+
+                # [오전장 매수 종목] -> 기존 설정대로 11시(TIMEOUT_HOUR)에 일괄 검사
+                if buy_time.hour < 12:
+                    if now_time.hour > BotConfig.TIMEOUT_HOUR:
+                        is_timeout = True
+                    elif now_time.hour == BotConfig.TIMEOUT_HOUR and now_time.minute >= BotConfig.TIMEOUT_MINUTE:
+                        is_timeout = True
+                        
+                # [오후장 매수 종목] -> 14시 50분 (장 마감 30분 전)까지 여유를 두고 검사
+                else:
+                    if now_time.hour > 14:
+                        is_timeout = True
+                    elif now_time.hour == 14 and now_time.minute >= 50:
+                        is_timeout = True
                     
                 if is_timeout:
                     # 웹소켓이 최신화한 메모리 상의 가격을 활용하여 API 호출 낭비 없음

@@ -106,7 +106,7 @@ class BotConfig:
     # ETF 식별용 키워드 (프로그램 수급 필터 예외 처리용)
     ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI", "레버리지"]
     MIN_STOCK_PRICE = 50_000
-    MAX_STOCK_PRICE = 200_000
+    MAX_STOCK_PRICE = 500_000
 
     # 1. 진입 (매수) 조건: 초기 수급 포착 (09:00 ~ 10:00)
     VALUEKING_START_HOUR = 9     
@@ -119,7 +119,8 @@ class BotConfig:
 
     # [추가] ⚡ 수급 가속도 (Velocity) 필터 기준 (단위: 억 원/분)
     TRADE_SPEED_MIN = 10  # 분당 10억 이상 유입
-    TRADE_SPEED_MAX = 50  # 분당 50억 초과 시 피날레 고점 판정(매수 금지)
+    # TRADE_SPEED_MAX = 50  # 분당 50억 초과 시 피날레 고점 판정(매수 금지)
+    TRADE_SPEED_MAX = float('inf')  # 분당 유입금액 무한대
     PG_SPEED_MIN = 0      # 분당 프로그램 순매수 0억 이상 (매도세 금지)
     PG_SPEED_MAX = 10     # 분당 10억 초과 시 비정상 스파이크 판정(매수 금지)
 
@@ -137,7 +138,8 @@ class BotConfig:
 
     # 4. 시가총액 하한선 필터 (단위: 억 원)
     MIN_MARKET_CAP = 2000   # 2,000억 원 미만 소형 잡주 진입 차단
-    MAX_MARKET_CAP = 100000   # 10조 원 초과 초대형주 진입 차단 (상한선) 추가!
+    # MAX_MARKET_CAP = 100000   # 10조 원 초과 초대형주 진입 차단 (상한선) 추가!
+    MAX_MARKET_CAP = float('inf')    # 시총 상한선 무한대 
 
     # ⏳ 타임아웃 컷 (11:00)
     TIMEOUT_HOUR = 11            
@@ -479,7 +481,11 @@ class TradingBot:
 
         reason = None
 
-        # 🚨 [수정] 최우선 방어선 (하이브리드 시간 버퍼 적용)
+        # 🚨 [수정] 최우선 방어선 (시가/편출 무시, 순수 -3% 손절만 유지)
+        if profit_rate <= BotConfig.HARD_STOP_RATE:
+            reason = f"💔기계적 절대 손절 컷 ({profit_rate*100:.2f}%)"
+
+        '''# 🚨 [수정] 최우선 방어선 (하이브리드 시간 버퍼 적용)
         if open_price > 0 and current_price < open_price: 
             reason = "📉시가(Open) 지지선 이탈 즉시 손절"
         elif profit_rate <= BotConfig.HARD_STOP_RATE:
@@ -496,7 +502,7 @@ class TradingBot:
                     if elapsed > 180: # 3분(180초) 경과 후에도 손절선 아래면 매도
                         reason = f"⏳버퍼초과 손절 ({profit_rate*100:.2f}%)"
                     else:
-                        return # 아직 버퍼 시간 안 끝났으면 매도 보류(Return)
+                        return # 아직 버퍼 시간 안 끝났으면 매도 보류(Return)'''
 
         # 만약 손절선(-3%) 위로 다시 반등했다면 버퍼 타이머 초기화
         if profit_rate > BotConfig.HARD_STOP_RATE and 'stop_buffer_time' in info:
@@ -609,8 +615,8 @@ class TradingBot:
                             codes_to_sell.append((my_code, f"⏳타임아웃(수익미달 컷)"))
                 
                 # 🚨 2. 조건검색 편출 즉시 매도 (수급 이탈)
-                if self.current_value_codes and (my_code not in self.current_value_codes):
-                    codes_to_sell.append((my_code, "🚨조건검색 편출 즉시 손절(수급이탈)"))
+                # if self.current_value_codes and (my_code not in self.current_value_codes):
+                #     codes_to_sell.append((my_code, "🚨조건검색 편출 즉시 손절(수급이탈)"))
 
             for code, reason in codes_to_sell:
                 if code not in self.pending_sells:
@@ -927,7 +933,7 @@ class TradingBot:
                     is_valid_time = True
                     current_min_trade_amt = 5_000_000_000
                     current_max_trade_amt = 20_000_000_000
-                elif datetime.time(12, 0, 0) <= current_time <= datetime.time(15, 0, 0):
+                elif datetime.time(12, 0, 0) <= current_time <= datetime.time(14, 30, 0):
                     is_valid_time = True
                     current_min_trade_amt = 100_000_000_000
                     current_max_trade_amt = float('inf')
@@ -989,7 +995,7 @@ class TradingBot:
                         if not (current_min_trade_amt <= current_trade_amt <= current_max_trade_amt): continue
                         
                         # 속도 필터 통과 여부
-                        if not passed_speed_filter: continue
+                        # if not passed_speed_filter: continue
                         
                         # 기본 양봉, 상승률 필터
                         if info['price'] < info['open']: continue

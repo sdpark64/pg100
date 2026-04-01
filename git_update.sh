@@ -1,3 +1,3 @@
 git add .
-git commit -m "타임아웃 오류 수정"
+git commit -m "손절조건 단순화"
 git push -u origin main

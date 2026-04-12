@@ -137,8 +137,8 @@ class BotConfig:
 
     # 4. 시가총액 하한선 필터 (단위: 억 원)
     MIN_MARKET_CAP = 2000   # 2,000억 원 미만 소형 잡주 진입 차단
-    # MAX_MARKET_CAP = 100000   # 10조 원 초과 초대형주 진입 차단 (상한선) 추가!
-    MAX_MARKET_CAP = float('inf')    # 시총 상한선 무한대 
+    MAX_MARKET_CAP = 15000   # 1.5조 원 초과 초대형주 진입 차단 (상한선) 추가!
+    # MAX_MARKET_CAP = float('inf')    # 시총 상한선 무한대 
 
     # ⏳ 타임아웃 컷 (11:00)
     TIMEOUT_HOUR = 11            

@@ -24,25 +24,24 @@ import trade_logger
 def setup_logging():
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-
-    file_handler = logging.handlers.RotatingFileHandler(
-        'output.log', maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
     
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+    # 👇 [수정] 핸들러가 비어있을 때만 새롭게 추가하도록 조건문 삽입
+    if not logger.handlers:
+        formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+        file_handler = logging.handlers.RotatingFileHandler(
+            'output.log', maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
+        
     return logger
 
 logger = setup_logging()
-
-# original_print = print
-# def print(*args, **kwargs):
-    # msg = " ".join(map(str, args))
-    # logger.info(msg)
 
 # ==============================================================================
 # 📝 [시스템 표준 입출력 로거 리다이렉션]
@@ -105,7 +104,7 @@ class BotConfig:
     EXCLUDE_KEYWORDS = ["스팩", "ETN", "ETF", "리츠", "우B", "우(", "인버스", "레버리지", "선물", "채권", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI"]
     # ETF 식별용 키워드 (프로그램 수급 필터 예외 처리용)
     ETF_KEYWORDS = ["ETF", "KODEX", "TIGER", "HANARO", "SOL", "PLUS", "RISE", "KOSEF", "ACE", "히어로즈", "WOORI", "레버리지"]
-    MIN_STOCK_PRICE = 50_000
+    MIN_STOCK_PRICE = 1_000
     MAX_STOCK_PRICE = 500_000
 
     # 1. 진입 (매수) 조건: 초기 수급 포착 (09:00 ~ 10:00)
@@ -114,11 +113,11 @@ class BotConfig:
     VALUEKING_END_MINUTE = 00
     VALUE_KING_MIN_VALUE = 5_000_000_000
     VALUE_KING_MAX_VALUE = 30_000_000_000 # 누적 거래대금 300억 이하 공략
-    MAX_RATE_LIMIT = 11.0  # 👈 [추가] 너무 높은 고점(+15% 초과) 추격 매수 금지 상한선
-    MIN_RATE_LIMIT = 5.0  # 5%이상 상승종목 매수
+    MIN_RATE_LIMIT = 6.0  # 6%이상 상승종목 매수
+    MAX_RATE_LIMIT = 15.0  # 👈 [추가] 너무 높은 고점(+15% 초과) 추격 매수 금지 상한선
 
     # [추가] ⚡ 수급 가속도 (Velocity) 필터 기준 (단위: 억 원/분)
-    TRADE_SPEED_MIN = 10  # 분당 10억 이상 유입
+    TRADE_SPEED_MIN = 20  # 분당 10억 이상 유입
     # TRADE_SPEED_MAX = 50  # 분당 50억 초과 시 피날레 고점 판정(매수 금지)
     TRADE_SPEED_MAX = float('inf')  # 분당 유입금액 무한대
     PG_SPEED_MIN = 0      # 분당 프로그램 순매수 0억 이상 (매도세 금지)
@@ -130,11 +129,11 @@ class BotConfig:
     TS_TRIGGER_RATE = 0.025      # 트레일링 스탑 발동 기준
     TS_STOP_GAP = 0.015          # 최고점 대비 -1.5% 하락 시 익절/손절
     HARD_STOP_RATE = -0.03       # 돌발 폭락 투매 대비 기계적 절대 손절 한도 (-3%)
-    DYNAMIC_STOP_RATE = 0.03     # 매수 후 장중 최고가 대비 -3.0% 하락 시 다이내믹 손절 (윗꼬리 방어)
+    DYNAMIC_STOP_RATE = 0.02     # 매수 후 장중 최고가 대비 -2.0% 하락 시 다이내믹 손절 (윗꼬리 방어)
 
     # 3. 프로그램 수급 필터 기준 (애매한 가짜 매수세 구간)
     PROGRAM_BUY_AMBIGUOUS_MIN = 0           # 하한선 (0원)
-    PROGRAM_BUY_AMBIGUOUS_MAX = 500_000_000 # 상한선 (5억 원)
+    PROGRAM_BUY_AMBIGUOUS_MAX = 300_000_000 # 상한선 (3억 원)
 
     # 4. 시가총액 하한선 필터 (단위: 억 원)
     MIN_MARKET_CAP = 2000   # 2,000억 원 미만 소형 잡주 진입 차단
@@ -719,13 +718,15 @@ class TradingBot:
                 self.ws_subscribe(code, "1")
                 
                 trade_amt_str = f"{(info.get('acml_vol', 0) * expected_price) // 100000000:,}억"
-                # 텔레그램 알림에도 실제 체결가를 반영
+                current_rate = info.get('rate', 0.0)
+                
                 msg = (f"⚡ [{MODE} 수급 포착 진입] {info['name']}\n"
-                       f"🎯 예상가: {expected_price:,}원\n"
-                       f"💰 체결가: {actual_buy_price:,}원\n"
-                       f"💵 거래대금: {trade_amt_str}\n"
-                       f"📦 수량: {qty}주")
-                telegram_notifier.send_telegram_message(msg)
+                       f"� 예상가: {expected_price:,}원\n"
+                       f"� 체결가: {actual_buy_price:,}원\n"
+                       f"� 상승률: {current_rate:+.2f}%\n"  # � 상승률 표출 추가 (부호 포함)
+                       f"� 거래대금: {trade_amt_str}\n"
+                       f"� 수량: {qty}주")
+                telegram_notifier.send_telegram_message(msg)                                
                 
                 trade_logger.log_buy({
                     'code': code, 'name': info['name'], 'strategy': 'VALUEKING', 'level': 0,
@@ -929,7 +930,7 @@ class TradingBot:
                 is_valid_time = False
                 current_time = now.time()
                 
-                if datetime.time(9, 6, 0) <= current_time <= datetime.time(10, 0, 0):
+                if datetime.time(9, 2, 0) <= current_time <= datetime.time(10, 0, 0):
                     is_valid_time = True
                     current_min_trade_amt = 5_000_000_000
                     current_max_trade_amt = 20_000_000_000
@@ -937,6 +938,9 @@ class TradingBot:
                     is_valid_time = True
                     current_min_trade_amt = 100_000_000_000
                     current_max_trade_amt = float('inf')
+
+                # 👇 [신규 추가] 조건을 통과한 매수 후보 종목들을 담을 빈 리스트 생성
+                candidates = []
 
                 # 2. 백그라운드 데이터 수집 및 매수 판별 통합 루프
                 for item in value_list:
@@ -950,14 +954,10 @@ class TradingBot:
                     info = self.api.fetch_price_detail(code, name)
                     if not info or info['open'] == 0: continue
 
-                    # ==========================================================
-                    # 👇 [추가] API 조회가 끝난 '직후'의 정확한 현재 시간을 새로 측정
                     current_fetch_time = datetime.datetime.now()
-                    # ==========================================================
-
                     is_etf = any(keyword in name for keyword in BotConfig.ETF_KEYWORDS)
 
-                    # [핵심] is_valid_time과 무관하게 데이터부터 항상 최신화하여 속도 계산
+                    # 🚨 [복구된 핵심 로직] 데이터 최신화 및 속도 계산
                     current_trade_amt = info.get('acml_vol', 0) * info['price']
                     current_pg_amt = info.get('program_buy', 0) * info['price']
                     passed_speed_filter = False
@@ -972,21 +972,20 @@ class TradingBot:
                             trade_speed_per_min = (trade_diff_100m / time_diff_sec) * 60
                             pg_speed_per_min = (pg_diff_100m / time_diff_sec) * 60
 
-                            # 거래대금 속도 체크 (공통 적용: 분당 10~50억)
-                            if BotConfig.TRADE_SPEED_MIN <= trade_speed_per_min <= BotConfig.TRADE_SPEED_MAX:
-                                
-                                # 프로그램 속도 체크 (ETF는 조건 프리패스, 일반 주식은 분당 0~10억 체크)
-                                if is_etf or (BotConfig.PG_SPEED_MIN <= pg_speed_per_min <= BotConfig.PG_SPEED_MAX):
-                                    passed_speed_filter = True
+                            price_diff = info['price'] - prev_data.get('price', info['price'])
 
+                            # 거래대금 속도 체크 (상한선 해제, MIN 속도만 충족하면 통과)
+                            if trade_speed_per_min >= BotConfig.TRADE_SPEED_MIN:
+                                if price_diff > 0:
+                                    passed_speed_filter = True
+                                # 프로그램 속도 체크 (프로그램도 상한선 해제)
+                                # if is_etf or (pg_speed_per_min >= BotConfig.PG_SPEED_MIN):
+                                #     passed_speed_filter = True
                     else:
-                        # 첫 포착 -> 데이터만 저장
-                        # 👇 [수정] 'now' 대신 'current_fetch_time' 저장
-                        self.prev_stock_data[code] = {'time': current_fetch_time, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
+                        self.prev_stock_data[code] = {'time': current_fetch_time, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt, 'price': info['price']}
                         continue 
 
-                    # 갱신
-                    self.prev_stock_data[code] = {'time': current_fetch_time, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt}
+                    self.prev_stock_data[code] = {'time': current_fetch_time, 'trade_amt': current_trade_amt, 'pg_amt': current_pg_amt, 'price': info['price']}
 
                     # =============== 🚧 실제 진입 판별 (is_valid_time일 때만) ===============
                     if self.is_buy_active and current_slots < BotConfig.MAX_GLOBAL_SLOTS and is_valid_time:
@@ -995,27 +994,41 @@ class TradingBot:
                         if not (current_min_trade_amt <= current_trade_amt <= current_max_trade_amt): continue
                         
                         # 속도 필터 통과 여부
-                        # if not passed_speed_filter: continue
+                        if not passed_speed_filter: continue
                         
                         # 기본 양봉, 상승률 필터
                         if info['price'] < info['open']: continue
                         if info['rate'] < BotConfig.MIN_RATE_LIMIT or info['rate'] > BotConfig.MAX_RATE_LIMIT: continue
                         
-                        # 윗꼬리(고점 대비 3% 이상 하락) 방어
+                        # 👇 [신규 추가] 윗꼬리 비율 계산
                         high_price = info.get('high', 0)
-                        if high_price > 0 and ((high_price - info['price']) / high_price * 100) >= 3.0: continue
+                        tail_ratio = 0.0
+                        if high_price > 0:
+                            tail_ratio = ((high_price - info['price']) / high_price) * 100
+                            if tail_ratio >= 3.0: continue # 3% 이상 밀린 종목 탈락
+                        info['tail_ratio'] = tail_ratio
 
                         # 프로그램 꼬시기 차단
-                        is_etf = any(keyword in name for keyword in BotConfig.ETF_KEYWORDS)
                         if not is_etf and BotConfig.PROGRAM_BUY_AMBIGUOUS_MIN <= current_pg_amt < BotConfig.PROGRAM_BUY_AMBIGUOUS_MAX: continue
 
                         # 시가총액
                         market_cap = info.get('market_cap', 0)
                         if market_cap < BotConfig.MIN_MARKET_CAP or market_cap > BotConfig.MAX_MARKET_CAP: continue
 
-                        self.execute_buy(info)
-                        if sum(1 for _ in self.portfolio) >= BotConfig.MAX_GLOBAL_SLOTS: break
+                        # 즉시 매수하지 않고 후보군에 담기
+                        candidates.append(info)
 
+                # ==========================================================
+                # 🚀 3. 후보군 정렬 및 최우선 종목 매수 실행
+                # ==========================================================
+                if candidates:
+                    # 윗꼬리가 짧은 순서대로(오름차순) 정렬
+                    candidates.sort(key=lambda x: x['tail_ratio'])
+                    
+                    for candidate in candidates:
+                        if sum(1 for _ in self.portfolio) >= BotConfig.MAX_GLOBAL_SLOTS: 
+                            break
+                        self.execute_buy(candidate)
                 time.sleep(1)
             except Exception as e:
                 print(f"Main Loop Error: {e}")
